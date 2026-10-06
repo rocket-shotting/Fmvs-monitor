@@ -6,6 +6,9 @@ import tempfile
 
 import numpy as np
 
+if hasattr(sys.stdout, "reconfigure"):          # Windows 콘솔(cp1252)에서도 한글 출력
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "nvr_inspector"))
 

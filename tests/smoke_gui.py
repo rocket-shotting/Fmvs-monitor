@@ -50,6 +50,13 @@ def main():
         dlg._on_kind_changed()
         collected = dlg._collect()
         assert collected.detector == kind, (collected.detector, kind)
+    dlg.v_kind.set(detectors.DETECTORS["match"]["label"])
+    dlg.v_duration.set("5")
+    dlg._on_kind_changed()
+    assert dlg.v_still.get() is True                    # 매칭 유형 선택 시 '정지 시에만 판정' 자동 켜짐
+    dlg.v_still_diff.set("2.5")
+    collected = dlg._collect()
+    assert collected.still_only and collected.still_diff == 2.5
     dlg._show_preview(detectors.overlay_defects(rgb, np.ones((120, 160), dtype=bool)))
     root.update()
     dlg.top.destroy()
@@ -91,6 +98,9 @@ def main():
     app.events.put(("log", "info", "로그 테스트"))
     app._poll_events()
     assert app.tree.set(roi.id, "state") == gui.STATE_TEXT["alarm"]
+    app.events.put(("status", roi.id, "moving", "움직임 – 정지 대기"))
+    app._poll_events()
+    assert app.tree.set(roi.id, "state") == gui.STATE_TEXT["moving"]
     app.monitor = None
 
     root.destroy()

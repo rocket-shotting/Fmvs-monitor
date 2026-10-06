@@ -79,6 +79,11 @@ class RoiRuntime:
         self.alerted = False
         self.last_alert = 0.0
         self.det_state: dict = {}
+        # 정지 시에만 판정 모드
+        self.motion_prev = None
+        self.still_count = 0
+        self.inspected = False          # 이번 정지에서 이미 판정했는지
+        self.last_result = ("wait", "")  # 이번 정지의 판정 결과 (상태, 상세)
         self.last_error = ""
         self.last_error_at = 0.0
 
@@ -205,6 +210,9 @@ class Monitor(threading.Thread):
 
         # 2) 캡처 + 판정
         frame = self._grab(roi, grabber)
+        if roi.still_only and roi.detector != "frozen":
+            self._check_on_stop(cfg, roi, rt, frame)
+            return
         ref = self._references(roi) if roi.detector in detectors.REFERENCE_KINDS else None
         res = detectors.evaluate(roi.detector, roi.params, frame, rt.det_state, reference=ref)
         now = self._clock()
@@ -237,6 +245,44 @@ class Monitor(threading.Thread):
             self._fire(cfg, roi, kind, res.detail, elapsed, snapshot, raw)
             rt.alerted, rt.last_alert = True, now
         self._emit("status", roi.id, "alarm", f"{res.detail} · {notifier.fmt_duration(elapsed)} 지속")
+
+    def _check_on_stop(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, frame: np.ndarray) -> None:
+        """움직이는 동안은 판정하지 않고, 정지가 확인된 순간 1회만 판정한다.
+        정지마다 독립 판정: NG면 그때마다 경보, 직전 경보 후 OK면 복구."""
+        gray = detectors.motion_gray(frame)
+        motion = detectors.motion_amount(rt.motion_prev, gray)
+        rt.motion_prev = gray
+        if motion is None or motion > roi.still_diff:
+            rt.still_count, rt.inspected = 0, False
+            amount = "-" if motion is None else f"{motion:.1f}"
+            self._emit("status", roi.id, "moving", f"움직임 – 정지 대기 (변화량 {amount} > {roi.still_diff:g})")
+            return
+        rt.still_count += 1
+        if rt.still_count < roi.still_frames:
+            self._emit("status", roi.id, "moving",
+                       f"정지 확인 중 {rt.still_count}/{roi.still_frames} (변화량 {motion:.1f})")
+            return
+        if rt.inspected:   # 이번 정지는 이미 판정함 → 결과 유지
+            self._emit("status", roi.id, *rt.last_result)
+            return
+
+        rt.inspected = True
+        ref = self._references(roi) if roi.detector in detectors.REFERENCE_KINDS else None
+        res = detectors.evaluate(roi.detector, roi.params, frame, rt.det_state, reference=ref)
+        stamp = f"[정지 판정 {datetime.now():%H:%M:%S}] "
+        if res.abnormal is None:
+            rt.last_result = ("wait", stamp + res.detail)
+        elif res.abnormal:
+            snapshot, raw = self._save_snapshot(roi, frame, res.mask)
+            self._fire(cfg, roi, "alert", res.detail, None, snapshot, raw)
+            rt.alerted, rt.last_alert = True, self._clock()
+            rt.last_result = ("alarm", stamp + res.detail)
+        else:
+            if rt.alerted:
+                self._fire(cfg, roi, "recover", res.detail, None, None)
+            rt.alerted = False
+            rt.last_result = ("ok", stamp + res.detail)
+        self._emit("status", roi.id, *rt.last_result)
 
     def _save_snapshot(self, roi: ROI, frame: np.ndarray, mask):
         """원본(샘플 등록용)과, 불량 위치가 있으면 빨간 표시본을 저장. 반환: (보기용, 원본)."""

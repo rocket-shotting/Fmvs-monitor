@@ -33,10 +33,12 @@ _MAX_LOG_LINES = 500
 STATE_TEXT = {
     "idle": "-", "ok": "정상", "pending": "이상 감지(확인 중)", "alarm": "🚨 경보",
     "skip": "건너뜀(다른 화면)", "wait": "대기", "off": "꺼짐", "error": "오류",
+    "moving": "움직임(대기)",
 }
 STATE_COLOR = {
     "ok": "#1b5e20", "pending": "#e65100", "alarm": "#b71c1c", "skip": "#616161",
     "wait": "#0d47a1", "off": "#9e9e9e", "error": "#880e4f", "idle": "#000000",
+    "moving": "#5c6bc0",
 }
 COLUMNS = (("enabled", "사용", 50), ("name", "이름", 150), ("detector", "검출 유형", 190),
            ("rect", "위치 (X,Y 폭×높이)", 170), ("assignee", "담당자", 120),

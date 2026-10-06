@@ -100,8 +100,24 @@ class RoiDialog:
         ttk.Checkbutton(timing, text="정상 복구 시에도 Teams 알림", variable=self.v_recovery).grid(
             row=2, column=0, columnspan=2, sticky="w", pady=2)
 
+        still = ttk.LabelFrame(box, text="움직이는 대상", padding=6)
+        still.grid(row=3, column=0, columnspan=2, sticky="we", pady=(8, 0))
+        self.v_still = tk.BooleanVar(value=self.roi.still_only)
+        self.v_still_diff = tk.StringVar(value=_fmt_param(self.roi.still_diff))
+        self.v_still_frames = tk.StringVar(value=str(self.roi.still_frames))
+        ttk.Checkbutton(still, text="정지 시에만 판정 (움직이는 동안은 판정하지 않고, 멈춘 순간 1회 판정)",
+                        variable=self.v_still).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(still, text="정지 기준 변화량 (이 값 이하면 정지, 0.1~255)").grid(row=1, column=0, sticky="w")
+        ttk.Entry(still, textvariable=self.v_still_diff, width=8).grid(row=1, column=1, sticky="w", padx=4)
+        ttk.Label(still, text="정지 확인 횟수 (연속 n번 변화 없으면 정지)").grid(row=2, column=0, sticky="w")
+        ttk.Entry(still, textvariable=self.v_still_frames, width=8).grid(row=2, column=1, sticky="w", padx=4)
+        ttk.Label(still, text="켜면 '이상 지속 시간'은 쓰지 않고, 멈출 때마다 판정해 NG면 바로 알립니다.\n"
+                              "[현재 화면으로 측정]에서 지금 변화량을 확인해 기준을 정하세요.\n"
+                              "검사 주기 × 정지 확인 횟수보다 오래 멈춰야 판정됩니다.",
+                  foreground="#555555", justify="left").grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
         test = ttk.Frame(box)
-        test.grid(row=4, column=0, columnspan=2, sticky="we", pady=(8, 0))
+        test.grid(row=4, column=0, columnspan=2, sticky="we", pady=(8, 0))  # row 3 = 움직이는 대상
         ttk.Button(test, text="현재 화면으로 측정", command=self._measure).pack(side="left")
         self.measure_label = ttk.Label(test, text="조건 조정 후 눌러서 현재 값을 확인하세요.",
                                        foreground="#555555", wraplength=260, justify="left")
@@ -144,6 +160,7 @@ class RoiDialog:
         if self._kind() in ("match", "shape") and self.v_duration.get().strip() in ("5", "5.0"):
             self.v_duration.set("0")
             self.v_recovery.set(False)
+            self.v_still.set(True)
 
     def _kind(self) -> str:
         return _LABEL_TO_KIND.get(self.v_kind.get(), "black")
@@ -219,6 +236,14 @@ class RoiDialog:
         except ValueError:
             raise ValueError("지속 시간/재알림 간격은 숫자로 입력하세요.")
         roi.notify_recovery = self.v_recovery.get()
+        roi.still_only = self.v_still.get()
+        try:
+            roi.still_diff = float(self.v_still_diff.get())
+            roi.still_frames = int(float(self.v_still_frames.get()))
+        except ValueError:
+            raise ValueError("정지 기준 변화량/정지 확인 횟수는 숫자로 입력하세요.")
+        if not 0.1 <= roi.still_diff <= 255 or not 1 <= roi.still_frames <= 20:
+            raise ValueError("정지 기준 변화량은 0.1~255, 정지 확인 횟수는 1~20 사이여야 합니다.")
         roi.expected_process = self.v_process.get().strip()
         roi.assignee = self.v_assignee.get().strip()
         roi.assignee_email = self.v_email.get().strip()
@@ -241,8 +266,8 @@ class RoiDialog:
             with hidden_windows(self.top, self.master):
                 with Grabber() as g:
                     frames.append(g.grab(roi.x, roi.y, roi.w, roi.h))
-                    if roi.detector == "frozen":
-                        time.sleep(1.0)
+                    if roi.detector == "frozen" or roi.still_only:
+                        time.sleep(1.0 if roi.detector == "frozen" else 0.5)
                         frames.append(g.grab(roi.x, roi.y, roi.w, roi.h))
                 cx, cy = roi.center()
                 proc = winutil.process_name_at(cx, cy)
@@ -259,6 +284,11 @@ class RoiDialog:
         self._show_preview(detectors.overlay_defects(frames[-1], res.mask))
         verdict = {True: "🚨 이상", False: "✅ 정상", None: "⏸ 판정 불가"}[res.abnormal]
         lines = [f"판정: {verdict}", res.detail]
+        if roi.still_only and roi.detector != "frozen" and len(frames) == 2:
+            motion = detectors.motion_amount(detectors.motion_gray(frames[0]), detectors.motion_gray(frames[1]))
+            moving = motion > roi.still_diff
+            lines.append(f"0.5초 간 변화량 {motion:.1f} → {'움직임 (판정 안 함)' if moving else '정지 (판정함)'}"
+                         f" · 기준 {roi.still_diff:g}")
         if roi.expected_process and winutil.IS_WINDOWS:
             if proc and proc.lower() == roi.expected_process.lower():
                 lines.append(f"대상 프로그램 확인: {proc} ✔")

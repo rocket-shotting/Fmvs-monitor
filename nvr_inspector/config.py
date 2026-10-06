@@ -39,6 +39,9 @@ class ROI:
     assignee_email: str = ""           # 담당자 Teams(회사) 이메일
     webhook_url: str = ""              # 비우면 공통 Webhook 사용
     expected_process: str = ""         # ROI 위치에 있어야 하는 프로그램(예: NVR_VIEWER.exe). 비우면 검사 안 함
+    still_only: bool = False           # 대상이 움직이는 동안은 판정하지 않고, 정지한 순간 1회만 판정
+    still_diff: float = 3.0            # 이 값 이하의 화면 변화량이면 '정지'로 본다 (밝기 0~255 평균 차)
+    still_frames: int = 2              # 연속 몇 번 변화가 없어야 정지로 확정할지
 
     def center(self):
         return self.x + self.w // 2, self.y + self.h // 2
@@ -46,7 +49,8 @@ class ROI:
     def signature(self) -> str:
         """판정 상태를 초기화해야 하는 변경(위치/유형/조건)을 구분하기 위한 값."""
         return json.dumps([self.x, self.y, self.w, self.h, self.detector, self.params,
-                           self.expected_process.lower()], sort_keys=True)
+                           self.expected_process.lower(), self.still_only, self.still_diff,
+                           self.still_frames], sort_keys=True)
 
     def detector_label(self) -> str:
         return detectors.DETECTORS.get(self.detector, {}).get("label", self.detector)
@@ -108,6 +112,9 @@ def roi_from_dict(d: dict) -> ROI:
     roi.notify_recovery = bool(d.get("notify_recovery", True))
     for key in ("assignee", "assignee_email", "webhook_url", "expected_process"):
         setattr(roi, key, str(d.get(key) or "").strip())
+    roi.still_only = bool(d.get("still_only", False))
+    roi.still_diff = _to_float(d.get("still_diff"), 3.0, 0.1, 255.0)
+    roi.still_frames = max(1, min(20, _to_int(d.get("still_frames"), 2)))
     return roi
 
 

@@ -576,3 +576,16 @@ def match_calibration(samples: dict, shape, max_shift_pct: float) -> dict:
     """샘플 관리 창에서 자동 기준/분리 상태를 보여주기 위한 함수."""
     _prepared, calib = _prepare_samples(samples, shape, {}, max_shift_pct)
     return calib
+
+
+# ===================== 움직임(정지) 판단 =====================
+
+def motion_gray(rgb: np.ndarray) -> np.ndarray:
+    return to_gray(subsample(rgb))
+
+
+def motion_amount(prev: Optional[np.ndarray], cur: np.ndarray) -> Optional[float]:
+    """직전 캡처 대비 화면 변화량 (밝기 평균 절대차, 0~255). 비교 불가면 None."""
+    if prev is None or prev.shape != cur.shape:
+        return None
+    return float(np.abs(cur - prev).mean())

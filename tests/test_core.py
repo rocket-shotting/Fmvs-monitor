@@ -276,6 +276,15 @@ class ConfigTests(unittest.TestCase):
             f.write("{broken")
         self.assertEqual(config.load(self.path).rois, [])
 
+    def test_still_fields_roundtrip(self):
+        cfg = config.AppConfig()
+        cfg.rois.append(config.ROI(still_only=True, still_diff=4.5, still_frames=3))
+        config.save(cfg, self.path)
+        r = config.load(self.path).rois[0]
+        self.assertEqual((r.still_only, r.still_diff, r.still_frames), (True, 4.5, 3))
+        old = config.roi_from_dict({"name": "x", "still_frames": 99})
+        self.assertEqual((old.still_only, old.still_frames), (False, 20))
+
     def test_webhook_override(self):
         cfg = config.AppConfig(webhook_url="https://common")
         self.assertEqual(cfg.webhook_for(config.ROI()), "https://common")
@@ -372,6 +381,32 @@ class WorkerFlowTests(unittest.TestCase):
                 states[e[1]] = e[2]
         self.assertEqual(states[cfg.rois[1].id], "pending")
         self.assertEqual(states[cfg.rois[0].id], "ok")
+
+    def test_still_only_inspects_once_per_stop(self):
+        roi = config.ROI(name="line", still_only=True, still_diff=3.0, still_frames=1, duration_sec=99)
+        cfg = config.AppConfig()
+        cfg.rois.append(roi)
+        dark = solid(0)
+        good1, good2 = noise(seed=7), noise(seed=8)
+        frames = [noise(seed=1), noise(seed=2),          # 움직임 (판정 안 함)
+                  dark, dark, dark,                       # 정지(NG): 첫 정지 확인 시 1회만 경보
+                  noise(seed=3), good1, good1,            # 움직임 → 정지(OK): 복구
+                  noise(seed=4), dark, dark]              # 다시 NG 정지 → 새 경보
+        events, _ = self.run_ticks(cfg, frames, [float(i) for i in range(len(frames))])
+        states = [e[2] for e in events if e[0] == "status"]
+        self.assertEqual(states, ["moving", "moving", "moving", "alarm", "alarm", "moving", "moving", "ok",
+                                  "moving", "moving", "alarm"])
+        kinds = [e[0] for e in events if e[0] in ("alert", "recover")]
+        self.assertEqual(kinds, ["alert", "recover", "alert"])
+
+    def test_still_frames_requires_consecutive_stillness(self):
+        roi = config.ROI(name="line", still_only=True, still_diff=3.0, still_frames=3)
+        cfg = config.AppConfig()
+        cfg.rois.append(roi)
+        dark = solid(0)
+        events, _ = self.run_ticks(cfg, [noise(seed=1), dark, dark, dark, dark], [0.0, 1.0, 2.0, 3.0, 4.0])
+        states = [e[2] for e in events if e[0] == "status"]
+        self.assertEqual(states, ["moving", "moving", "moving", "moving", "alarm"])
 
     def test_disabled_roi_not_captured(self):
         cfg = config.AppConfig()

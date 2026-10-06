@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -34,13 +34,14 @@ def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def load_reference(roi_id: str) -> Optional[np.ndarray]:
-    path = paths.reference_path(roi_id)
-    if not os.path.exists(path):
-        return None
+def _load_png(path: str) -> np.ndarray:
     from PIL import Image
     with Image.open(path) as img:
         return np.asarray(img.convert("RGB"))
+
+
+def load_references(roi_id: str) -> List[np.ndarray]:
+    return [_load_png(path) for path in paths.reference_paths(roi_id)]
 
 
 def save_png(rgb: np.ndarray, path: str) -> None:
@@ -74,7 +75,7 @@ class Monitor(threading.Thread):
         self._events = events
         self._teams = teams
         self._runtime: Dict[str, RoiRuntime] = {}
-        self._refs: Dict[str, tuple] = {}   # roi_id -> (mtime, array)
+        self._refs: Dict[str, tuple] = {}   # roi_id -> ((파일, 수정시각)…, 배열 목록)
         self._clock = time.time              # 테스트에서 교체 가능
 
     # ---- GUI에서 호출 ----
@@ -134,19 +135,19 @@ class Monitor(threading.Thread):
             del self._runtime[stale]
             self._refs.pop(stale, None)
 
-    def _reference(self, roi_id: str) -> Optional[np.ndarray]:
-        path = paths.reference_path(roi_id)
+    def _references(self, roi_id: str) -> List[np.ndarray]:
+        """기준 이미지 목록 (파일이 바뀌었을 때만 다시 읽음)."""
+        files = paths.reference_paths(roi_id)
         try:
-            mtime = os.path.getmtime(path)
+            key = tuple((f, os.path.getmtime(f)) for f in files)
         except OSError:
-            self._refs.pop(roi_id, None)
-            return None
+            key = None
         cached = self._refs.get(roi_id)
-        if cached and cached[0] == mtime:
+        if key is not None and cached and cached[0] == key:
             return cached[1]
-        arr = load_reference(roi_id)
-        self._refs[roi_id] = (mtime, arr)
-        return arr
+        arrays = [_load_png(f) for f in files if os.path.exists(f)]
+        self._refs[roi_id] = (key, arrays)
+        return arrays
 
     def _check(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, grabber: Grabber) -> None:
         # 1) ROI 위치에 지정한 프로그램(NVR)이 보이는지 확인. 다른 창이 덮고 있으면 판정하지 않는다.
@@ -161,7 +162,7 @@ class Monitor(threading.Thread):
 
         # 2) 캡처 + 판정
         frame = grabber.grab(roi.x, roi.y, roi.w, roi.h)
-        ref = self._reference(roi.id) if roi.detector == "reference" else None
+        ref = self._references(roi.id) if roi.detector in detectors.REFERENCE_KINDS else None
         res = detectors.evaluate(roi.detector, roi.params, frame, rt.det_state, reference=ref)
         now = self._clock()
 
@@ -189,7 +190,7 @@ class Monitor(threading.Thread):
         repeat_due = roi.repeat_min > 0 and now - rt.last_alert >= roi.repeat_min * 60
         if not rt.alerted or repeat_due:
             kind = "repeat" if rt.alerted else "alert"
-            snapshot = self._save_snapshot(roi, frame)
+            snapshot = self._save_snapshot(roi, detectors.overlay_defects(frame, res.mask))
             self._fire(cfg, roi, kind, res.detail, elapsed, snapshot)
             rt.alerted, rt.last_alert = True, now
         self._emit("status", roi.id, "alarm", f"{res.detail} · {notifier.fmt_duration(elapsed)} 지속")

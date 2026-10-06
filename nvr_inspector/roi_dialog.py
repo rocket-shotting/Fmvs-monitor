@@ -5,6 +5,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Dict, Optional
 
+from PIL import Image, ImageTk
+
 import detectors
 import notifier
 import winutil
@@ -17,6 +19,8 @@ _LABEL_TO_KIND = {detectors.DETECTORS[k]["label"]: k for k in detectors.DETECTOR
 
 
 def _fmt_param(value) -> str:
+    if isinstance(value, str):
+        return value
     if isinstance(value, list):
         return ",".join(str(int(v)) for v in value)
     f = float(value)
@@ -102,6 +106,10 @@ class RoiDialog:
         self.measure_label = ttk.Label(test, text="조건 조정 후 눌러서 현재 값을 확인하세요.",
                                        foreground="#555555", wraplength=260, justify="left")
         self.measure_label.pack(side="left", padx=8)
+        # 측정 화면 미리보기 (형상 검사 불량 위치는 빨간색 표시)
+        self.preview_label = ttk.Label(box)
+        self.preview_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self._preview_photo = None
         self._rebuild_params(use_saved=True)
 
     def _build_process(self, parent):
@@ -144,11 +152,16 @@ class RoiDialog:
         else:
             values = detectors.default_params(kind)
         self.param_vars = {}
-        for i, (key, label, typ, _default, _lo, _hi) in enumerate(spec["params"]):
-            var = tk.StringVar(value=_fmt_param(values[key]))
-            self.param_vars[key] = var
+        for i, (key, label, typ, _default, lo, _hi) in enumerate(spec["params"]):
             ttk.Label(self.params_frame, text=label).grid(row=i, column=0, sticky="w", pady=2)
-            ttk.Entry(self.params_frame, textvariable=var, width=12).grid(row=i, column=1, sticky="w", padx=4)
+            if typ == "choice":
+                var = tk.StringVar(value=lo.get(values[key], next(iter(lo.values()))))
+                ttk.Combobox(self.params_frame, textvariable=var, state="readonly", width=24,
+                             values=list(lo.values())).grid(row=i, column=1, columnspan=2, sticky="w", padx=4)
+            else:
+                var = tk.StringVar(value=_fmt_param(values[key]))
+                ttk.Entry(self.params_frame, textvariable=var, width=12).grid(row=i, column=1, sticky="w", padx=4)
+            self.param_vars[key] = var
             if typ == "rgb":
                 ttk.Button(self.params_frame, text="ROI 평균색 가져오기",
                            command=self._pick_mean_color).grid(row=i, column=2, padx=4)
@@ -174,8 +187,12 @@ class RoiDialog:
         roi.enabled = self.v_enabled.get()
         roi.detector = self._kind()
         params = {}
-        for key, label, typ, _default, lo, hi in detectors.DETECTORS[roi.detector]["params"]:
+        for key, label, typ, default, lo, hi in detectors.DETECTORS[roi.detector]["params"]:
             raw = self.param_vars[key].get().strip()
+            if typ == "choice":
+                value = next((k for k, v in lo.items() if v == raw), default)
+                params[key] = value
+                continue
             try:
                 if typ == "rgb":
                     value = [int(float(p)) for p in raw.replace(" ", "").split(",")]
@@ -228,10 +245,11 @@ class RoiDialog:
             return
         self._regrab()
         state: dict = {}
-        ref = worker.load_reference(roi.id) if roi.detector == "reference" else None
+        ref = worker.load_references(roi.id) if roi.detector in detectors.REFERENCE_KINDS else None
         res = None
         for frame in frames:
             res = detectors.evaluate(roi.detector, roi.params, frame, state, reference=ref)
+        self._show_preview(detectors.overlay_defects(frames[-1], res.mask))
         verdict = {True: "🚨 이상", False: "✅ 정상", None: "⏸ 판정 불가"}[res.abnormal]
         lines = [f"판정: {verdict}", res.detail]
         if roi.expected_process and winutil.IS_WINDOWS:
@@ -240,6 +258,12 @@ class RoiDialog:
             else:
                 lines.append(f"⚠ ROI 위치 프로그램: {proc or '확인 불가'} (지정: {roi.expected_process})")
         self.measure_label.configure(text="\n".join(lines), foreground="#000000")
+
+    def _show_preview(self, rgb):
+        img = Image.fromarray(rgb)
+        img.thumbnail((400, 220))
+        self._preview_photo = ImageTk.PhotoImage(img)
+        self.preview_label.configure(image=self._preview_photo)
 
     def _pick_mean_color(self):
         try:

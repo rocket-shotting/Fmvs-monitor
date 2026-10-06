@@ -76,6 +76,95 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(p["rgb"], [255, 0, 10])
 
 
+def tab_image(h=240, w=320, x=130, y=40, tw=60, th=150, bg=30, fg=200, seed=0, fold=0.0,
+              bend=0, notch=None):
+    """합성 탭 이미지: 어두운 배경 위 밝은 직사각형 탭.
+    fold: 위쪽 비율만큼 접혀 사라짐, bend: 위쪽 절반을 옆으로 휨(px), notch: (y,x,h,w) 찍힘."""
+    rng = np.random.default_rng(seed)
+    img = np.full((h, w), bg, dtype=np.float32)
+    top = y + int(th * fold)
+    img[top:y + th, x:x + tw] = fg
+    if bend:
+        mid = y + th // 2
+        img[y:mid, :] = bg
+        img[y:mid, x + bend:x + bend + tw] = fg
+    if notch:
+        ny, nx, nh, nw = notch
+        img[ny:ny + nh, nx:nx + nw] = bg
+    img += rng.normal(0, 4, img.shape)
+    gray = np.clip(img, 0, 255).astype(np.uint8)
+    return np.repeat(gray[:, :, None], 3, axis=2)
+
+
+class ShapeDetectorTests(unittest.TestCase):
+    """형상 검사(탭 접힘·찍힘·휨)."""
+
+    def ev(self, frame, refs, **params):
+        return detectors.evaluate("shape", params, frame, {}, reference=refs)
+
+    def test_normal_same_and_shifted_and_lighting(self):
+        ref = tab_image(seed=1)
+        self.assertFalse(self.ev(tab_image(seed=2), ref).abnormal)
+        shifted = self.ev(tab_image(x=142, y=33, seed=3), ref)
+        self.assertFalse(shifted.abnormal, shifted.detail)
+        self.assertIn("위치 보정", shifted.detail)
+        brighter = tab_image(bg=70, fg=250, seed=4)        # 조명 밝기 변화
+        self.assertFalse(self.ev(brighter, ref).abnormal)
+
+    def test_fold_bend_notch_detected(self):
+        ref = tab_image(seed=1)
+        for name, frame in (("접힘", tab_image(fold=0.35, seed=5)),
+                            ("휨", tab_image(bend=25, seed=6)),
+                            ("찍힘", tab_image(notch=(120, 130, 25, 25), seed=7))):
+            res = self.ev(frame, ref)
+            self.assertTrue(res.abnormal, f"{name}: {res.detail}")
+            self.assertIsNotNone(res.mask)
+            self.assertEqual(res.mask.shape, frame.shape[:2])
+
+    def test_defect_mask_location(self):
+        ref = tab_image(seed=1)
+        res = self.ev(tab_image(notch=(120, 130, 25, 25), seed=8), ref)
+        ys, xs = np.nonzero(res.mask)
+        self.assertTrue(110 <= ys.mean() <= 150 and 125 <= xs.mean() <= 160)
+        over = detectors.overlay_defects(tab_image(seed=8), res.mask)
+        self.assertGreater(int(over[ys[0], xs[0], 0]), int(over[ys[0], xs[0], 1]))
+
+    def test_dark_tab_on_bright_background_auto(self):
+        ref = tab_image(bg=220, fg=40, seed=1)
+        self.assertFalse(self.ev(tab_image(bg=220, fg=40, x=136, seed=2), ref).abnormal)
+        self.assertTrue(self.ev(tab_image(bg=220, fg=40, fold=0.4, seed=3), ref).abnormal)
+
+    def test_multiple_references_pick_closest(self):
+        straight, bent = tab_image(seed=1), tab_image(bend=25, seed=2)
+        frame = tab_image(bend=25, seed=3)
+        self.assertTrue(self.ev(frame, [straight]).abnormal)
+        res = self.ev(frame, [straight, bent])
+        self.assertFalse(res.abnormal, res.detail)
+        self.assertIn("기준 2장", res.detail)
+
+    def test_presence_gate_and_bad_reference(self):
+        ref = tab_image(seed=1)
+        empty = tab_image(th=0, seed=2)
+        self.assertIsNone(self.ev(empty, ref, min_presence=50).abnormal)
+        self.assertTrue(self.ev(empty, ref).abnormal)          # 감지 조건 없으면 '없음'도 불량
+        flat = np.full((240, 320, 3), 90, dtype=np.uint8)
+        self.assertIsNone(self.ev(tab_image(seed=2), flat).abnormal)
+        self.assertIsNone(self.ev(tab_image(seed=2), None).abnormal)
+
+    def test_texture_option(self):
+        ref = tab_image(seed=1)
+        frame = tab_image(seed=2)
+        rng = np.random.default_rng(9)
+        frame[60:170, 132:188] = np.clip(frame[60:170, 132:188].astype(int)
+                                         + rng.integers(-60, 60, (110, 56, 1)), 0, 255).astype(np.uint8)
+        self.assertFalse(self.ev(frame, ref).abnormal)                     # 윤곽은 그대로
+        self.assertTrue(self.ev(frame, ref, max_texture=0.5).abnormal)     # 표면 구김 감지
+
+    def test_choice_param_normalize(self):
+        self.assertEqual(detectors.normalize_params("shape", {"polarity": "bad"})["polarity"], "auto")
+        self.assertEqual(detectors.normalize_params("shape", {"polarity": "dark"})["polarity"], "dark")
+
+
 class ConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

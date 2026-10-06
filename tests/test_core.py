@@ -146,9 +146,9 @@ class WorkerFlowTests(unittest.TestCase):
         teams = mock.Mock()
         mon = worker.Monitor(cfg, events, teams)
         grabber = FakeGrabber(frames)
-        with mock.patch.object(worker.time, "time", side_effect=times):
-            for _ in times:
-                mon._tick(cfg, grabber)
+        mon._clock = iter(times).__next__
+        for _ in times:
+            mon._tick(cfg, grabber)
         out = []
         while not events.empty():
             out.append(events.get())

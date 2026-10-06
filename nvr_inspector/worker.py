@@ -75,6 +75,7 @@ class Monitor(threading.Thread):
         self._teams = teams
         self._runtime: Dict[str, RoiRuntime] = {}
         self._refs: Dict[str, tuple] = {}   # roi_id -> (mtime, array)
+        self._clock = time.time              # 테스트에서 교체 가능
 
     # ---- GUI에서 호출 ----
     def update_config(self, cfg: AppConfig) -> None:
@@ -162,7 +163,7 @@ class Monitor(threading.Thread):
         frame = grabber.grab(roi.x, roi.y, roi.w, roi.h)
         ref = self._reference(roi.id) if roi.detector == "reference" else None
         res = detectors.evaluate(roi.detector, roi.params, frame, rt.det_state, reference=ref)
-        now = time.time()
+        now = self._clock()
 
         if res.abnormal is None:
             rt.abnormal_since = None

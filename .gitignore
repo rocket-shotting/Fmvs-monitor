@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+build/
+dist/
+# 실행 시 생성되는 사용자 데이터 (Webhook URL 등 민감정보 포함)
+settings.json
+settings.v1.bak.json
+logs/
+refs/
+snapshots/

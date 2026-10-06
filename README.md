@@ -1,0 +1,85 @@
+# NVR 화면 이상 검출기
+
+NVR 라이브 화면에 ROI를 여러 개 지정하고, **ROI마다 검출 유형·조건·담당자를 따로 설정**해 이상이 지속되면
+팝업 + **Teams 채팅**으로 담당자에게 알리는 Windows 프로그램입니다.
+
+## 기능
+
+| 항목 | 내용 |
+|---|---|
+| ROI 지정 | 라이브 화면 위에서 드래그로 여러 개 지정 (멀티 모니터 지원) |
+| 검출 유형 (ROI별) | 흑화면 · 백화면 · 단색(No Signal) · 화면 정지 · 특정 색상 · 기준 화면과 다름 |
+| 오탐 방지 | 이상 **지속 시간** 조건, ROI 위치의 **프로그램(프로세스) 확인** – 다른 창이 덮으면 건너뜀 |
+| 알림 | 팝업(오른쪽 위 ✕로 닫기, 복구되면 초록색으로 변경), 경고음, Teams 카드, 재알림, 복구 알림 |
+| 기록 | `logs/` 로그, `snapshots/` 경보 시점 ROI 이미지 |
+| 조건 튜닝 | ROI 설정 창의 **[현재 화면으로 측정]** 으로 현재 값과 판정을 바로 확인 |
+
+## 사용 순서
+
+1. NVR 라이브 화면을 띄운 상태에서 **[＋ 화면에서 ROI 추가]** → 감시할 영역을 드래그(여러 개 가능) → Enter
+2. ROI마다 설정 창이 뜨면 검출 유형/조건, 지속 시간, 담당자를 입력하고 **[현재 화면으로 측정]** 으로 확인 후 저장
+   - 대상 프로그램(예: `NVR_VIEWER.exe`)은 ROI를 그릴 때 자동으로 채워집니다.
+   - "기준 화면과 다름" 유형은 정상 화면일 때 **[기준 이미지 저장]** 을 눌러야 동작합니다.
+3. **[⚙ 설정]** 에서 Teams 알림 사용 + 공통 Webhook URL 입력 → **[Teams 테스트]** 로 수신 확인
+4. **[▶ 검출 시작]** (메인 창은 ROI를 가리지 않도록 자동 최소화)
+
+## Teams 알림 설정 (Power Automate Workflows)
+
+Teams 앱 화면을 자동 조작하는 방식은 Teams 업데이트·화면 잠금·팝업·포커스 변경 시 **조용히 실패**하므로 쓰지 않습니다.
+대신 Microsoft 공식 **Workflows 웹훅**으로 HTTP 요청 한 번에 메시지를 보냅니다. 감시 PC에 Teams가 로그인되어 있지 않아도 됩니다.
+(메뉴 이름은 Teams/Power Automate 버전에 따라 조금 다를 수 있습니다.)
+
+### 방법 A – 채팅방/채널 하나로 받기 (가장 간단)
+1. Teams에서 알림을 받을 채팅(담당자들이 들어간 그룹 채팅 등) 또는 채널을 엽니다.
+2. `…` → **워크플로(Workflows)** → 템플릿 **"웹후크 요청이 수신되면 채팅에 게시" / "Send webhook alerts to a chat"** 선택
+3. 생성 완료 화면의 **URL을 복사** → 프로그램 [설정] → 공통 Webhook URL에 붙여넣기
+4. ROI마다 다른 방으로 보내려면 방마다 흐름을 만들어 ROI 설정의 **개별 Webhook URL** 에 넣습니다.
+
+### 방법 B – 담당자 개인 채팅으로 자동 분배 (흐름 1개)
+프로그램이 보내는 JSON에 `assignee_email` 이 들어 있으므로, 흐름 하나로 담당자별 1:1 채팅을 보낼 수 있습니다.
+1. Power Automate → **인스턴트 클라우드 흐름** → 트리거 **"Teams 웹후크 요청을 받은 경우 (When a Teams webhook request is received)"**,
+   누가 트리거할 수 있는지: **모든 사용자(Anyone)**
+2. 작업 **"채팅 또는 채널에 카드 게시 (Post card in a chat or channel)"**
+   - 게시자: 흐름 봇 / 게시 위치: 흐름 봇과 채팅
+   - 받는 사람: 식 `triggerBody()?['assignee_email']`
+   - 적응형 카드: 식 `string(triggerBody()?['attachments'][0]['content'])`
+3. 저장 후 트리거의 HTTP URL을 프로그램의 공통 Webhook URL에 입력
+4. ROI 설정에 **담당자 이메일(회사 Teams 계정)** 을 반드시 입력
+
+전송되는 JSON (요약):
+```json
+{
+  "event": "alert | repeat | recover | test",
+  "title": "🚨 NVR 화면 이상 감지",
+  "message": "[1번 카메라] 화면에서 '흑화면 (검은 화면)' 이상이 감지되었습니다. 확인 부탁드립니다.",
+  "roi_name": "1번 카메라", "detector": "흑화면 (검은 화면)", "detail": "어두운 픽셀 100.0% (기준 ≥95%)",
+  "assignee": "홍길동", "assignee_email": "hong@example.com",
+  "pc": "NVR-PC", "time": "2026-10-06 12:00:00", "elapsed_sec": 75,
+  "type": "message",
+  "attachments": [ { "contentType": "application/vnd.microsoft.card.adaptive", "content": { "...": "적응형 카드" } } ]
+}
+```
+
+> ⚠ Webhook URL에는 인증 서명이 포함되어 있습니다. 외부에 공유하지 말고, `settings.json` 은 저장소에 올리지 마세요 (`.gitignore` 처리됨).
+
+## 빌드 (EXE)
+
+Windows에서 `build.bat` 실행 → `dist\NVR_흑변_검출기.exe`
+(직접: `pip install -r requirements.txt pyinstaller` 후 `pyinstaller --noconfirm --clean NVR_흑변_검출기.spec`)
+
+실행 파일 옆에 `settings.json`, `logs/`, `refs/`, `snapshots/` 가 생성됩니다.
+구버전(흑변 전용) `settings.json` 을 EXE 옆에 두면 첫 실행 시 자동 변환되고 원본은 `settings.v1.bak.json` 으로 백업됩니다.
+
+## 테스트
+
+```
+python -m unittest discover -s tests -v
+```
+
+## 주의 사항
+
+- **화면 잠금/화면 보호기**: 잠긴 화면은 캡처가 검게 나옵니다. 대상 프로그램 확인을 켜두면 "확인 불가"로 건너뛰지만, 감시 PC는 잠금/절전을 해제해 두세요.
+- **화면 정지 검출**: 움직임이 없는 장면(야간 빈 복도 등)은 정상이어도 정지로 보일 수 있습니다. 지속 시간을 길게(60초 이상) 두고, ROI에서 시계 표시는 빼세요.
+- **팝업/메인 창이 ROI를 가리면** 해당 ROI는 "건너뜀(다른 화면)"으로 표시됩니다. 팝업은 헤더를 끌어서 옮길 수 있습니다.
+- **NVR 화면 레이아웃(분할 수, 창 위치)이 바뀌면** ROI 좌표가 어긋나므로 [위치 다시 지정]을 해야 합니다.
+- **회사 프록시/SSL 검사** 환경에서는 Teams 전송이 실패할 수 있습니다. 실패 내용은 로그 창과 `logs/` 에 남습니다.

@@ -4,9 +4,23 @@ import tkinter as tk
 from contextlib import contextmanager
 
 
+_capture_hidden = []   # 캡처할 때 항상 같이 숨길 창 (화면 표시 오버레이 등)
+
+
+def register_capture_hidden(win: tk.Wm) -> None:
+    if win not in _capture_hidden:
+        _capture_hidden.append(win)
+
+
+def unregister_capture_hidden(win: tk.Wm) -> None:
+    if win in _capture_hidden:
+        _capture_hidden.remove(win)
+
+
 @contextmanager
 def hidden_windows(*windows: tk.Wm, delay: float = 0.35):
     """캡처 전에 우리 프로그램 창을 잠깐 숨긴다 (창이 ROI를 가리면 우리 창이 캡처되므로)."""
+    windows = tuple(windows) + tuple(w for w in _capture_hidden if w not in windows)
     states = []
     for w in windows:
         try:

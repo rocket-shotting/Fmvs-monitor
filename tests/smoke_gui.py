@@ -92,6 +92,37 @@ def main():
     root.update()
     app.alerts.close_all()
 
+    # 검출 중 화면 표시 오버레이: 클릭 통과 + 프로그램 확인에서 제외 + 캡처 제외
+    import winutil
+    from capture import Grabber
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    probe = config.ROI(name="표시", x=sw - 260, y=sh - 260, w=100, h=100)
+    app.cfg.rois.append(probe)
+    app.monitor = object.__new__(worker.Monitor)
+    app.states[probe.id] = ("alarm", "테스트")
+    app._sync_overlay()
+    root.update()
+    ov = app.overlay
+    assert ov.visible()
+    assert winutil.overlay_style_ok(ov.win.winfo_id()), "오버레이가 클릭 통과 상태가 아님"
+    proc = winutil.process_name_at(probe.x + 50, probe.y + 50) or ""
+    own = os.path.basename(sys.executable).lower()
+    print(f"오버레이 아래 프로그램: {proc!r}, 캡처 제외: {ov.capture_excluded}")
+    assert proc.lower() != own, "프로그램 확인이 오버레이를 NVR 화면으로 착각함"
+    ov.heartbeat(True, 2, 1)
+    ov.heartbeat(False, 2, 1)
+    root.update()
+    if ov.capture_excluded:
+        with Grabber() as g:
+            shot = g.grab(probe.x - 10, probe.y - 10, 120, 120).astype(int)
+        red = (np.abs(shot - np.array([0xd5, 0, 0])).max(axis=2) < 40).mean()
+        print(f"캡처에 찍힌 테두리 색 비율: {red:.3f}")
+        assert red < 0.01, "오버레이가 화면 캡처에 찍힘"
+    app.monitor = None
+    app._sync_overlay()
+    assert not ov.visible()
+    app.cfg.rois.remove(probe)
+
     # 상태 이벤트 처리 + 로그
     app.monitor = object.__new__(worker.Monitor)   # 실행 중인 것처럼 상태 표시만 확인
     app.events.put(("status", roi.id, "alarm", "테스트 상세"))

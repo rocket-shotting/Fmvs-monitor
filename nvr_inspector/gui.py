@@ -14,6 +14,7 @@ import alert
 import config as cfgmod
 import detectors
 import notifier
+import overlay
 import paths
 import roi_dialog
 import roi_editor
@@ -59,11 +60,14 @@ class App:
         self.monitor: Optional[worker.Monitor] = None
         self.alerts = alert.AlertManager(self.root, on_register=self.register_sample)
         self.states: Dict[str, tuple] = {}
+        self.overlay = overlay.ScreenOverlay(self.root)
+        self._last_status = 0.0      # 검출 스레드가 마지막으로 상태를 보낸 시각 (응답 없음 감지)
 
         self._build()
         self._update_running_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(200, self._poll_events)
+        self.root.after(500, self._heartbeat)
         if self.cfg.auto_start and self.cfg.rois:
             self.root.after(800, self.start)
 
@@ -180,6 +184,7 @@ class App:
             self.monitor.update_config(self.cfg)
         self.alerts.sound_enabled = self.cfg.sound_enabled
         self._refresh_tree()
+        self._sync_overlay()
         if message:
             self.log("info", message)
 
@@ -188,6 +193,7 @@ class App:
         """메인 창을 숨기고 화면을 캡처한 뒤 오버레이에서 ROI를 그린다.
         반환: (사각형 목록 또는 None, 각 사각형 중심의 프로그램 이름 목록)"""
         try:
+            self.overlay.hide()
             self.root.withdraw()
             self.root.update()
             time.sleep(0.4)
@@ -203,6 +209,7 @@ class App:
         finally:
             self.root.deiconify()
             self.root.lift()
+            self._sync_overlay()
 
     def add_rois(self):
         try:
@@ -380,6 +387,7 @@ class App:
         self.states.clear()
         self.alerts.sound_enabled = self.cfg.sound_enabled
         self.monitor = worker.Monitor(self.cfg, self.events, self.teams)
+        self._last_status = time.monotonic()
         self.monitor.start()
         self.log("info", f"검출 시작 (ROI {sum(r.enabled for r in self.cfg.rois)}개, "
                          f"{self.cfg.interval_sec:g}초 주기)")
@@ -402,6 +410,30 @@ class App:
         self.btn_stop.state(["!disabled"] if running else ["disabled"])
         self.root.title(f"{APP_TITLE} – {'검출 중' if running else '중지됨'}")
         self._refresh_tree()
+        self._sync_overlay()
+
+    def _sync_overlay(self):
+        """검출 중이면 화면 표시(ROI 테두리·동작 배지)를 보이고, 아니면 숨긴다."""
+        try:
+            if self.monitor is not None:
+                self.overlay.show(self.cfg.rois, self.states, self.cfg.show_overlay, self.cfg.show_badge)
+                if self.overlay.win is not None and not self.overlay.capture_excluded \
+                        and not getattr(self, "_warned_capture", False):
+                    self._warned_capture = True
+                    self.log("warning", "이 Windows는 화면 표시를 캡처에서 제외하지 못합니다(Windows 10 2004 이상 필요). "
+                                        "ROI끼리 붙어 있으면 테두리가 옆 ROI 판정에 영향을 줄 수 있으니 [설정]에서 화면 표시를 끄세요.")
+            else:
+                self.overlay.hide()
+        except tk.TclError:
+            log.exception("화면 표시 오버레이 오류")
+
+    def _heartbeat(self):
+        if self.monitor is not None:
+            stall_limit = max(10.0, self.cfg.interval_sec * 5)
+            ok = time.monotonic() - self._last_status < stall_limit
+            alarms = sum(1 for s, _d in self.states.values() if s == "alarm")
+            self.overlay.heartbeat(ok, sum(r.enabled for r in self.cfg.rois), alarms)
+        self.root.after(500, self._heartbeat)
 
     def _update_status_bar(self):
         running = self.monitor is not None
@@ -423,10 +455,12 @@ class App:
                 kind = event[0]
                 if kind == "status":
                     _k, roi_id, state, detail = event
+                    self._last_status = time.monotonic()
                     if (self.monitor is not None and self.cfg.find(roi_id) is not None
                             and self.states.get(roi_id) != (state, detail)):
                         self.states[roi_id] = (state, detail)
                         self._update_row(roi_id)
+                        self.overlay.set_state(roi_id, state)
                         changed = True
                 elif kind == "alert":
                     info = event[1]
@@ -479,6 +513,7 @@ class App:
         except OSError:
             log.exception("종료 시 설정 저장 실패")
         self.alerts.close_all()
+        self.overlay.destroy()
         self.root.destroy()
 
     def run(self):

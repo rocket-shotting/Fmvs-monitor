@@ -66,6 +66,8 @@ class AppConfig:
     sound_enabled: bool = True
     auto_start: bool = False
     minimize_on_start: bool = True
+    show_overlay: bool = True          # 검출 중 화면에 ROI 위치/상태 표시
+    show_badge: bool = True            # 검출 중 화면 모서리에 '동작 중' 배지 표시
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)
 
@@ -127,6 +129,8 @@ def config_from_dict(d: dict) -> AppConfig:
     cfg.sound_enabled = bool(d.get("sound_enabled", True))
     cfg.auto_start = bool(d.get("auto_start", False))
     cfg.minimize_on_start = bool(d.get("minimize_on_start", True))
+    cfg.show_overlay = bool(d.get("show_overlay", True))
+    cfg.show_badge = bool(d.get("show_badge", True))
     cfg.pc_label = str(d.get("pc_label") or socket.gethostname())
     seen = set()
     for item in d.get("rois") or []:

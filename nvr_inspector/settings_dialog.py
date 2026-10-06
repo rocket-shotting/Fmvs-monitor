@@ -29,6 +29,8 @@ class SettingsDialog:
         self.v_sound = tk.BooleanVar(value=cfg.sound_enabled)
         self.v_auto = tk.BooleanVar(value=cfg.auto_start)
         self.v_minimize = tk.BooleanVar(value=cfg.minimize_on_start)
+        self.v_overlay = tk.BooleanVar(value=cfg.show_overlay)
+        self.v_badge = tk.BooleanVar(value=cfg.show_badge)
         ttk.Label(general, text="검사 주기(초, 0.2~60)").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(general, textvariable=self.v_interval, width=8).grid(row=0, column=1, sticky="w", padx=6)
         ttk.Label(general, text="PC 표시 이름(알림에 표시)").grid(row=1, column=0, sticky="w", pady=2)
@@ -36,7 +38,9 @@ class SettingsDialog:
         checks = (("검출 시 팝업 표시", self.v_popup),
                   ("검출 시 경고음", self.v_sound),
                   ("프로그램 시작 시 검출 자동 시작", self.v_auto),
-                  ("검출 시작 시 이 창 최소화 (창이 ROI를 가리지 않도록)", self.v_minimize))
+                  ("검출 시작 시 이 창 최소화 (창이 ROI를 가리지 않도록)", self.v_minimize),
+                  ("검출 중 화면에 ROI 위치·상태 테두리 표시 (클릭 통과, 캡처에 안 찍힘)", self.v_overlay),
+                  ("검출 중 화면 모서리에 '동작 중' 배지 표시", self.v_badge))
         for i, (text, var) in enumerate(checks, start=2):
             ttk.Checkbutton(general, text=text, variable=var).grid(row=i, column=0, columnspan=2, sticky="w")
 
@@ -87,6 +91,8 @@ class SettingsDialog:
         c.sound_enabled = self.v_sound.get()
         c.auto_start = self.v_auto.get()
         c.minimize_on_start = self.v_minimize.get()
+        c.show_overlay = self.v_overlay.get()
+        c.show_badge = self.v_badge.get()
         c.teams_enabled = self.v_teams.get()
         c.webhook_url = url
         self.result = c

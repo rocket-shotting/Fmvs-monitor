@@ -108,10 +108,17 @@ def main():
     ov = app.overlay
     assert ov.visible()
     assert winutil.overlay_style_ok(ov.win.winfo_id()), "오버레이가 클릭 통과 상태가 아님"
-    proc = winutil.process_name_at(probe.x + 50, probe.y + 50) or ""
+    root.withdraw()                     # 메인 창이 측정 지점을 가리지 않게 (CI 화면이 작음)
+    root.update()
+    px, py = probe.x + 50, probe.y + 50
+    hwnd = winutil.window_at(px, py)
+    proc = winutil.process_name_at(px, py) or ""
+    print(f"오버레이 아래 창: {hwnd}, 프로그램: {proc!r}, 오버레이로 판정됨: {winutil.is_passthrough(hwnd)}, "
+          f"캡처 제외: {ov.capture_excluded}")
+    assert not winutil.is_passthrough(hwnd), "프로그램 확인이 오버레이 창을 대상으로 판단함"
     own = os.path.basename(sys.executable).lower()
-    print(f"오버레이 아래 프로그램: {proc!r}, 캡처 제외: {ov.capture_excluded}")
-    assert proc.lower() != own, "프로그램 확인이 오버레이를 NVR 화면으로 착각함"
+    assert proc.lower() != own, f"측정 지점에 우리 프로그램 창이 있음: {proc}"
+    root.deiconify()
     ov.heartbeat(True, 2, 1)
     ov.heartbeat(False, 2, 1)
     root.update()

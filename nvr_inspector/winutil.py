@@ -116,11 +116,8 @@ def _window_below(hwnd, x: int, y: int):
     return None
 
 
-def process_name_at(x: int, y: int):
-    """화면 좌표 (x, y)에 보이는 창의 실행 파일명(예: NVR_VIEWER.exe).
-
-    창 핸들(HWND)은 NVR 프로그램이 내부적으로 창을 다시 만들면 바뀌므로
-    프로세스 단위로 비교해야 오탐이 없다. 화면 표시 오버레이는 건너뛴다. 알 수 없으면 None."""
+def window_at(x: int, y: int):
+    """화면 좌표 (x, y)에 보이는 최상위 창 핸들. 화면 표시 오버레이는 건너뛴다."""
     if not IS_WINDOWS:
         return None
     hwnd = _user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
@@ -129,8 +126,21 @@ def process_name_at(x: int, y: int):
     root = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd
     if root in _passthrough_hwnds:
         root = _window_below(root, int(x), int(y))
-        if not root:
-            return None
+    return root or None
+
+
+def is_passthrough(hwnd) -> bool:
+    return hwnd in _passthrough_hwnds
+
+
+def process_name_at(x: int, y: int):
+    """화면 좌표 (x, y)에 보이는 창의 실행 파일명(예: NVR_VIEWER.exe).
+
+    창 핸들(HWND)은 NVR 프로그램이 내부적으로 창을 다시 만들면 바뀌므로
+    프로세스 단위로 비교해야 오탐이 없다. 화면 표시 오버레이는 건너뛴다. 알 수 없으면 None."""
+    root = window_at(x, y)
+    if not root:
+        return None
     pid = _pid_of(root)
     if not pid:
         return None

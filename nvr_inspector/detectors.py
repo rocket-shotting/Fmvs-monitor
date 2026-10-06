@@ -82,8 +82,23 @@ DETECTORS["shape"] = {
     ],
 }
 
-DETECTOR_ORDER = ["black", "white", "uniform", "frozen", "color", "reference", "shape"]
-REFERENCE_KINDS = ("reference", "shape")   # 기준 이미지가 필요한 검출 유형
+DETECTORS["match"] = {
+    "label": "OK/NG 이미지 매칭 (분류)",
+    "help": "ROI별로 등록한 OK·NG·무시 샘플 이미지 중 현재 화면과 가장 비슷한 쪽으로 판정합니다.\n"
+            "· NG 샘플과 가장 비슷하면 → 불량\n"
+            "· OK 샘플과 비슷해도 'OK 허용 거리'보다 멀면 → 처음 보는 이상으로 보고 불량\n"
+            "· 무시 샘플(제품 없음/이동 중 등)과 가장 비슷하면 → 판정 보류\n"
+            "[샘플 이미지] 버튼으로 현재 화면이나 파일(NG 사진)에서 샘플을 등록하세요.\n"
+            "OK 허용 거리를 0으로 두면 샘플들로 자동 계산합니다. 흐르는 라인은 이상 지속 시간 0초를 권장합니다.",
+    "params": [
+        ("ok_threshold", "OK 허용 거리 (0 = 샘플로 자동 계산)", "float", 0.0, 0.0, 3.0),
+        ("max_shift", "위치 허용 범위 (ROI 크기 대비 %)", "float", 15.0, 0.0, 45.0),
+    ],
+}
+
+DETECTOR_ORDER = ["black", "white", "uniform", "frozen", "color", "reference", "shape", "match"]
+REFERENCE_KINDS = ("reference", "shape", "match")   # 기준/샘플 이미지가 필요한 검출 유형
+SAMPLE_CLASSES = {"ok": "OK (정상)", "ng": "NG (불량)", "skip": "무시 (제품 없음·이동 중)"}
 
 _MAX_SIDE = 160      # 판정용 샘플링 최대 변 길이 (속도)
 _REF_GRID = 32       # 기준 이미지 비교용 블록 평균 해상도
@@ -149,7 +164,7 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
              reference=None) -> Result:
     """state: ROI별로 유지되는 dict (화면 정지 검출의 직전 프레임 보관용).
     reference: 기준 이미지 배열 1장 또는 여러 장의 리스트 (정상품 여러 장 → 가장 비슷한 것과 비교)."""
-    if reference is None:
+    if reference is None or isinstance(reference, dict):
         refs = []
     elif isinstance(reference, np.ndarray):
         refs = [reference]
@@ -160,6 +175,9 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
     p = normalize_params(kind, params)
     if rgb.size == 0:
         return Result(None, 0.0, "캡처 영역이 비어 있음")
+    if kind == "match":
+        samples = reference if isinstance(reference, dict) else {"ok": refs}
+        return _evaluate_match(p, rgb, samples, state)
     small = subsample(rgb)
 
     if kind == "black":
@@ -404,3 +422,157 @@ def overlay_defects(rgb: np.ndarray, mask: Optional[np.ndarray]) -> np.ndarray:
 def mean_color(rgb: np.ndarray):
     m = subsample(rgb).reshape(-1, 3).mean(axis=0)
     return [int(round(v)) for v in m]
+
+
+# ===================== OK/NG 이미지 매칭 =====================
+# 각 이미지를 축소·정규화(밝기 평균 0, 표준편차 1)한 뒤, 허용 범위 안에서 가장 잘 겹치는 위치의
+# RMS 차이를 '거리'로 쓴다. 위치 탐색은 FFT 상관으로 모든 이동량을 한 번에 계산한다.
+
+_MATCH_SIDE = 96          # 분석 해상도 (긴 변). 한 화면에 카메라가 많아 ROI가 작은 경우를 고려
+_MIN_OVERLAP = 0.5        # 겹치는 면적이 이보다 작은 이동은 비교하지 않음
+_DEFAULT_OK_DISTANCE = 0.6
+_MIN_STD = 12.0           # 정규화 시 밝기 표준편차 하한 (gray 0~255 기준)
+
+
+def _match_gray(rgb: np.ndarray) -> np.ndarray:
+    small, _f = resize_area(to_gray(rgb), _MATCH_SIDE)
+    # 거의 단색인 화면(제품 없음 등)의 노이즈가 무늬처럼 증폭되지 않도록 편차 하한을 둔다
+    return (small - small.mean()) / max(float(small.std()), _MIN_STD)
+
+
+class _Spectra:
+    """한 이미지의 FFT 사전 계산 (이미지, 제곱, 유효영역)."""
+
+    def __init__(self, g: np.ndarray, fft_shape):
+        ones = np.ones_like(g)
+        self.shape = g.shape
+        self.g = g
+        self.f = np.fft.rfft2(g, fft_shape)
+        self.f2 = np.fft.rfft2(g * g, fft_shape)
+        self.f1 = np.fft.rfft2(ones, fft_shape)
+
+
+def _fft_shape(shape):
+    return 2 * shape[0], 2 * shape[1]
+
+
+def _shift_grid(shape, max_shift_pct):
+    s = int(round(max_shift_pct / 100.0 * max(shape)))
+    s = min(s, shape[0] - 1, shape[1] - 1)
+    return np.arange(-s, s + 1)
+
+
+def match_distance(cur: _Spectra, ref: _Spectra, max_shift_pct: float):
+    """반환: (거리, dy, dx). cur[y+dy, x+dx] ↔ ref[y, x]."""
+    fs = _fft_shape(cur.shape)
+    corr = lambda fa, fb: np.fft.irfft2(fa * np.conj(fb), fs)  # noqa: E731
+    count = corr(cur.f1, ref.f1)
+    saa = corr(cur.f2, ref.f1)
+    sbb = corr(cur.f1, ref.f2)
+    sab = corr(cur.f, ref.f)
+    shifts = _shift_grid(cur.shape, max_shift_pct)
+    iy, ix = np.ix_(shifts % fs[0], shifts % fs[1])
+    n = count[iy, ix]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mse = (saa[iy, ix] + sbb[iy, ix] - 2.0 * sab[iy, ix]) / n
+    mse[n < _MIN_OVERLAP * cur.g.size] = np.inf
+    k = np.unravel_index(np.argmin(mse), mse.shape)
+    if not np.isfinite(mse[k]):
+        return float("inf"), 0, 0
+    return float(np.sqrt(max(mse[k], 0.0))), int(shifts[k[0]]), int(shifts[k[1]])
+
+
+def _prepare_samples(samples: dict, shape, state: dict, max_shift_pct: float):
+    """샘플 전처리 + 자동 기준 계산. 샘플 배열이 그대로면 state에 캐시해 재사용."""
+    key = (tuple((c, tuple(id(a) for a in samples.get(c, []))) for c in SAMPLE_CLASSES),
+           shape, max_shift_pct)
+    cached = state.get("match_cache")
+    if cached and cached[0] == key:
+        return cached[1]
+    prepared = {}
+    for cls in SAMPLE_CLASSES:
+        grays = [_match_gray(a) for a in samples.get(cls, []) if a.shape[:2] == shape]
+        prepared[cls] = [_Spectra(g, _fft_shape(g.shape)) for g in grays]
+    calib = calibrate(prepared, max_shift_pct)
+    state["match_cache"] = (key, (prepared, calib))
+    return prepared, calib
+
+
+def calibrate(prepared: dict, max_shift_pct: float) -> dict:
+    """OK끼리의 거리(정상 편차)와 NG→OK 거리로 OK 허용 거리를 자동 계산."""
+    oks, ngs = prepared.get("ok", []), prepared.get("ng", [])
+    ok_spread = []
+    for i, a in enumerate(oks):
+        others = [match_distance(a, b, max_shift_pct)[0] for j, b in enumerate(oks) if j != i]
+        if others:
+            ok_spread.append(min(others))
+    ng_to_ok = [min(match_distance(n, b, max_shift_pct)[0] for b in oks) for n in ngs] if oks else []
+    ok_max = max(ok_spread) if ok_spread else None
+    ng_min = min(ng_to_ok) if ng_to_ok else None
+    if ok_max is not None and ng_min is not None:
+        threshold = (ok_max + ng_min) / 2 if ok_max < ng_min else ok_max * 1.2
+    elif ok_max is not None:
+        threshold = max(ok_max * 1.5, 0.15)
+    else:
+        threshold = _DEFAULT_OK_DISTANCE
+    if ok_max is None:
+        quality = "OK 샘플이 1장이라 자동 기준이 부정확합니다 – OK 샘플을 3장 이상 등록하세요"
+    elif ng_min is None:
+        quality = f"OK 편차 최대 {ok_max:.2f} – NG 샘플을 등록하면 더 정확해집니다"
+    elif ok_max < ng_min:
+        quality = f"분리 양호: OK 편차 최대 {ok_max:.2f} < NG 거리 최소 {ng_min:.2f}"
+    else:
+        quality = (f"⚠ OK/NG가 겹침: OK 편차 최대 {ok_max:.2f} ≥ NG 거리 최소 {ng_min:.2f} – "
+                   "ROI를 대상에 맞게 좁히거나 샘플을 추가하세요")
+    return {"threshold": threshold, "ok_max": ok_max, "ng_min": ng_min, "quality": quality,
+            "counts": {c: len(prepared.get(c, [])) for c in SAMPLE_CLASSES}}
+
+
+def _diff_mask(cur: _Spectra, ref: _Spectra, dy: int, dx: int, shape) -> np.ndarray:
+    cs, rs = _overlap(cur.shape, dx, dy)
+    diff = np.zeros(cur.shape, dtype=bool)
+    diff[cs] = opening(np.abs(cur.g[cs] - ref.g[rs]) > 1.5, 1)
+    factor = max(1, -(-max(shape[:2]) // _MATCH_SIDE))
+    return _upscale_mask(diff, factor, shape)
+
+
+def _evaluate_match(p: dict, rgb: np.ndarray, samples: dict, state: dict) -> Result:
+    shape = rgb.shape[:2]
+    if not samples.get("ok"):
+        return Result(None, 0.0, "OK 샘플 이미지 없음 – [샘플 이미지]에서 OK 이미지를 등록하세요")
+    prepared, calib = _prepare_samples(samples, shape, state, p["max_shift"])
+    if not prepared["ok"]:
+        return Result(None, 0.0, "ROI 크기가 바뀜 – 샘플 이미지를 다시 등록하세요")
+    g = _match_gray(rgb)
+    cur = _Spectra(g, _fft_shape(g.shape))
+
+    best = {}
+    for cls, specs in prepared.items():
+        for spec in specs:
+            d, dy, dx = match_distance(cur, spec, p["max_shift"])
+            if cls not in best or d < best[cls][0]:
+                best[cls] = (d, dy, dx, spec)
+    threshold = p["ok_threshold"] if p["ok_threshold"] > 0 else calib["threshold"]
+    d_ok = best["ok"][0]
+    d_ng = best.get("ng", (float("inf"),))[0]
+    d_skip = best.get("skip", (float("inf"),))[0]
+    dist = f"OK {d_ok:.2f}" + (f" · NG {d_ng:.2f}" if "ng" in best else "") + \
+           (f" · 무시 {d_skip:.2f}" if "skip" in best else "")
+    auto = "자동" if p["ok_threshold"] <= 0 else "수동"
+
+    if d_skip < min(d_ok, d_ng):
+        return Result(None, d_ok, f"무시 샘플과 가장 비슷 – 판정 보류 ({dist})")
+    if d_ng < d_ok:
+        return Result(True, d_ok, f"NG 샘플과 가장 비슷 ({dist})",
+                      _diff_mask(cur, best["ok"][3], best["ok"][1], best["ok"][2], rgb.shape))
+    if d_ok > threshold:
+        _d, dy, dx, spec = best["ok"]
+        return Result(True, d_ok, f"OK와 다름: 거리 {d_ok:.2f} > 허용 {threshold:.2f}({auto}) ({dist})",
+                      _diff_mask(cur, spec, dy, dx, rgb.shape))
+    return Result(False, d_ok, f"OK와 일치: 거리 {d_ok:.2f} ≤ 허용 {threshold:.2f}({auto}) ({dist})")
+
+
+def match_calibration(samples: dict, shape, max_shift_pct: float) -> dict:
+    """샘플 관리 창에서 자동 기준/분리 상태를 보여주기 위한 함수."""
+    _prepared, calib = _prepare_samples(samples, shape, {}, max_shift_pct)
+    return calib

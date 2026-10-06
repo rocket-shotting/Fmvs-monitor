@@ -17,6 +17,7 @@ import notifier
 import paths
 import roi_dialog
 import roi_editor
+import samples_dialog
 import settings_dialog
 import winutil
 import worker
@@ -54,7 +55,7 @@ class App:
         self.events: "queue.Queue" = queue.Queue()
         self.teams = notifier.TeamsNotifier(self._report_threadsafe)
         self.monitor: Optional[worker.Monitor] = None
-        self.alerts = alert.AlertManager(self.root)
+        self.alerts = alert.AlertManager(self.root, on_register=self.register_sample)
         self.states: Dict[str, tuple] = {}
 
         self._build()
@@ -80,7 +81,7 @@ class App:
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=4)
         for text, cmd in (("＋ 화면에서 ROI 추가", self.add_rois), ("편집", self.edit_selected),
                           ("위치 다시 지정", self.reposition_selected), ("복제", self.duplicate_selected),
-                          ("사용/해제", self.toggle_selected), ("기준 이미지 저장", self.save_reference),
+                          ("사용/해제", self.toggle_selected), ("샘플/기준 이미지", self.open_samples),
                           ("삭제", self.delete_selected)):
             ttk.Button(bar, text=text, command=cmd).pack(side="left", padx=2)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
@@ -129,7 +130,10 @@ class App:
         else:
             state, detail = self.states.get(roi.id, ("idle", ""))
         kind = roi.detector_label()
-        if roi.detector in detectors.REFERENCE_KINDS:
+        if roi.detector == "match":
+            n = {c: len(paths.reference_paths(roi.id, c)) for c in detectors.SAMPLE_CLASSES}
+            kind += f" · OK {n['ok']} / NG {n['ng']} / 무시 {n['skip']}"
+        elif roi.detector in detectors.REFERENCE_KINDS:
             n = len(paths.reference_paths(roi.id))
             kind += f" · 기준 {n}장" if n else " · 기준 없음"
         return ("✔" if roi.enabled else "–", roi.name, kind,
@@ -261,8 +265,9 @@ class App:
         result = roi_dialog.edit_roi(self.root, dup, "ROI 복제")
         if result is not None:
             if (result.x, result.y, result.w, result.h) == (roi.x, roi.y, roi.w, roi.h):
-                for src in paths.reference_paths(roi.id):   # 같은 위치면 기준 이미지도 복사
-                    shutil.copyfile(src, paths.new_reference_path(result.id))
+                for cls in detectors.SAMPLE_CLASSES:     # 같은 위치면 샘플/기준 이미지도 복사
+                    for src in paths.reference_paths(roi.id, cls):
+                        shutil.copyfile(src, paths.new_reference_path(result.id, cls))
             self.cfg.rois.insert(self.cfg.rois.index(roi) + 1, result)
             self._commit(f"[{result.name}] 추가 (복제)")
 
@@ -289,49 +294,40 @@ class App:
             self._delete_reference(r.id)
         self._commit(f"ROI 삭제: {names}")
 
-    def save_reference(self):
-        rois = self._selected_rois() or [r for r in self.cfg.rois if r.detector in detectors.REFERENCE_KINDS]
-        if not rois:
-            messagebox.showinfo("안내", "기준 이미지를 저장할 ROI를 선택하세요.\n"
-                                      "(선택하지 않으면 '기준 화면과 다름'·'형상 검사' 유형 ROI 전체)", parent=self.root)
+    def open_samples(self):
+        roi = self._one_selected()
+        if roi is None:
             return
-        names = ", ".join(r.name for r in rois)
-        existing = {r.id: len(paths.reference_paths(r.id)) for r in rois}
-        if any(existing.values()):
-            answer = messagebox.askyesnocancel(
-                "기준 이미지 저장",
-                f"대상: {names}\n이미 저장된 기준 이미지가 있습니다.\n\n"
-                "[예] 정상품 이미지로 추가 (여러 장 중 가장 비슷한 것과 비교 → 오탐 감소)\n"
-                "[아니오] 기존 기준을 모두 지우고 새로 저장\n[취소] 저장 안 함\n\n"
-                "지금 화면이 정상 상태인지 확인하셨나요?", parent=self.root)
-            if answer is None:
-                return
-            replace = not answer
-        else:
-            if not messagebox.askyesno("기준 이미지 저장",
-                                       f"현재 화면을 정상 기준으로 저장합니다.\n대상: {names}\n\n"
-                                       "지금 화면이 정상 상태인지 확인하셨나요?", parent=self.root):
-                return
-            replace = False
-        try:
-            with hidden_windows(self.root, delay=0.4):
-                with Grabber() as g:
-                    frames = [(r, g.grab(r.x, r.y, r.w, r.h)) for r in rois]
-            for r, frame in frames:
-                if replace:
-                    paths.delete_references(r.id)
-                worker.save_png(frame, paths.new_reference_path(r.id))
-        except Exception as e:
-            log.exception("기준 이미지 저장 실패")
-            messagebox.showerror("오류", f"기준 이미지 저장 실패: {e}", parent=self.root)
+        if roi.detector not in detectors.REFERENCE_KINDS:
+            messagebox.showinfo("안내", f"[{roi.name}]의 검출 유형({roi.detector_label()})은 샘플 이미지를 쓰지 않습니다.\n"
+                                      "'OK/NG 이미지 매칭', '형상 검사', '기준 화면과 다름' 유형에서 사용합니다.",
+                                parent=self.root)
             return
-        counts = ", ".join(f"{r.name} {len(paths.reference_paths(r.id))}장" for r in rois)
+        samples_dialog.manage_samples(self.root, roi)
         self._refresh_tree()
-        self.log("info", f"기준 이미지 {'교체' if replace else '저장'}: {counts}")
+        self.log("info", f"[{roi.name}] 샘플 이미지 갱신 (검출 중이면 바로 반영)")
+
+    def register_sample(self, roi_id: str, cls: str, raw_path: str) -> str:
+        """경보 팝업의 'OK로 등록 / NG로 등록' 버튼. 성공 시 빈 문자열, 실패 시 오류 메시지."""
+        roi = self.cfg.find(roi_id)
+        if roi is None:
+            return "ROI가 삭제되었습니다."
+        try:
+            frame = worker._load_png(raw_path)
+        except Exception as e:
+            return f"스냅샷을 열 수 없습니다: {e}"
+        if frame.shape[:2] != (roi.h, roi.w):
+            return "ROI 크기가 바뀌어 등록할 수 없습니다."
+        dest = paths.new_reference_path(roi_id, cls)
+        shutil.copyfile(raw_path, dest)
+        label = detectors.SAMPLE_CLASSES.get(cls, cls)
+        self.log("info", f"[{roi.name}] 경보 화면을 {label} 샘플로 등록: {os.path.basename(dest)}")
+        self._refresh_tree()
+        return ""
 
     @staticmethod
     def _delete_reference(roi_id: str):
-        paths.delete_references(roi_id)
+        paths.delete_references(roi_id)   # 모든 클래스(OK/NG/무시) 삭제
 
     # ================= 설정/테스트 =================
     def open_settings(self):

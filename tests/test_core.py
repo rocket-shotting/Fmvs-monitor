@@ -165,6 +165,78 @@ class ShapeDetectorTests(unittest.TestCase):
         self.assertEqual(detectors.normalize_params("shape", {"polarity": "dark"})["polarity"], "dark")
 
 
+class MatchDetectorTests(unittest.TestCase):
+    """OK/NG 이미지 매칭 (흐르는 라인: 탭 위치가 매번 다름)."""
+
+    @classmethod
+    def setUpClass(cls):
+        rng = np.random.default_rng(0)
+        cls.ok = staticmethod(lambda seed: tab_image(h=120, w=160, x=int(rng.integers(50, 75)),
+                                                     y=int(rng.integers(15, 30)),
+                                                     tw=30, th=70, seed=seed))
+        cls.samples = {
+            "ok": [cls.ok(i) for i in range(5)],
+            "ng": [tab_image(h=120, w=160, x=60, y=20, tw=30, th=70, fold=0.4, seed=10),
+                   tab_image(h=120, w=160, x=58, y=20, tw=30, th=70, bend=14, seed=11)],
+            "skip": [tab_image(h=120, w=160, th=0, seed=20)],
+        }
+
+    def ev(self, frame, samples=None, state=None, **params):
+        return detectors.evaluate("match", params, frame, {} if state is None else state,
+                                  reference=self.samples if samples is None else samples)
+
+    def test_classification(self):
+        self.assertFalse(self.ev(self.ok(30)).abnormal)
+        self.assertFalse(self.ev(tab_image(h=120, w=160, x=62, y=22, tw=30, th=70, bg=70, fg=240, seed=31)).abnormal)
+        ng = self.ev(tab_image(h=120, w=160, x=66, y=20, tw=30, th=70, fold=0.4, seed=32))
+        self.assertTrue(ng.abnormal)
+        self.assertIn("NG 샘플", ng.detail)
+        novel = self.ev(tab_image(h=120, w=160, x=60, y=20, tw=30, th=70, notch=(45, 60, 25, 18), seed=33))
+        self.assertTrue(novel.abnormal, novel.detail)                       # NG 샘플에 없는 불량
+        self.assertIn("OK와 다름", novel.detail)
+        self.assertIsNotNone(novel.mask)
+        self.assertIsNone(self.ev(tab_image(h=120, w=160, th=0, bg=60, seed=34)).abnormal)  # 빈 화면 → 보류
+
+    def test_manual_threshold_and_missing_samples(self):
+        self.assertTrue(self.ev(self.ok(40), ok_threshold=0.001).abnormal)
+        self.assertIsNone(self.ev(self.ok(41), samples={"ok": []}).abnormal)
+        wrong = {"ok": [tab_image(h=60, w=80, seed=1)]}
+        self.assertIsNone(self.ev(self.ok(42), samples=wrong).abnormal)
+
+    def test_calibration_and_cache(self):
+        calib = detectors.match_calibration(self.samples, (120, 160), 15)
+        self.assertLess(calib["ok_max"], calib["ng_min"])
+        self.assertTrue(calib["ok_max"] < calib["threshold"] < calib["ng_min"])
+        state = {}
+        self.ev(self.ok(50), state=state)
+        cached = state["match_cache"]
+        self.ev(self.ok(51), state=state)
+        self.assertIs(state["match_cache"], cached)                         # 샘플 그대로면 재계산 안 함
+
+    def test_shift_direction(self):
+        ref = tab_image(h=120, w=160, x=60, y=20, tw=30, th=70, seed=1)
+        cur = tab_image(h=120, w=160, x=70, y=26, tw=30, th=70, seed=2)
+        a = detectors._Spectra(detectors._match_gray(cur), detectors._fft_shape((60, 80)))
+        b = detectors._Spectra(detectors._match_gray(ref), detectors._fft_shape((60, 80)))
+        d, dy, dx = detectors.match_distance(a, b, 20)
+        self.assertEqual((dy, dx), (3, 5))                                  # 분석 해상도(1/2) 기준
+
+
+class SamplePathTests(unittest.TestCase):
+    def test_classes(self):
+        import paths
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(paths, "REF_DIR", d):
+            for cls in ("ok", "ok", "ng", "skip"):
+                open(paths.new_reference_path("ab12cd34", cls), "w").close()
+            self.assertEqual([os.path.basename(p) for p in paths.reference_paths("ab12cd34", "ok")],
+                             ["ab12cd34.png", "ab12cd34_2.png"])
+            self.assertEqual(len(paths.reference_paths("ab12cd34", "ng")), 1)
+            paths.delete_references("ab12cd34", "ng")
+            self.assertEqual(paths.reference_paths("ab12cd34", "ng"), [])
+            paths.delete_references("ab12cd34")
+            self.assertEqual(os.listdir(d), [])
+
+
 class ConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -261,6 +333,8 @@ class WorkerFlowTests(unittest.TestCase):
         self.assertEqual(payload["event"], "alert")
         alert_info = next(e[1] for e in events if e[0] == "alert")
         self.assertTrue(os.path.exists(alert_info["snapshot"]))
+        self.assertTrue(os.path.exists(alert_info["raw_snapshot"]))
+        self.assertEqual(alert_info["roi_detector"], "black")
 
     def test_repeat_and_teams_disabled(self):
         roi = config.ROI(name="cam2", duration_sec=0, repeat_min=1)
@@ -271,6 +345,33 @@ class WorkerFlowTests(unittest.TestCase):
         alerts = [e[1]["kind"] for e in events if e[0] == "alert"]
         self.assertEqual(alerts, ["alert", "repeat"])
         teams.send.assert_not_called()
+
+    def test_union_capture_for_many_rois(self):
+        cfg = config.AppConfig()
+        for i in range(5):
+            cfg.rois.append(config.ROI(name=f"cam{i}", x=10 + i * 50, y=20, w=40, h=30, duration_sec=99))
+        screen = noise(100, 400)
+        screen[20:50, 60:100] = 0                      # cam1 위치만 검은 화면
+
+        class Recorder:
+            calls = []
+
+            def grab(self, x, y, w, h):
+                self.calls.append((x, y, w, h))
+                return screen[y:y + h, x:x + w]
+
+        events = queue.Queue()
+        mon = worker.Monitor(cfg, events, mock.Mock())
+        grabber = Recorder()
+        mon._tick(cfg, grabber)
+        self.assertEqual(grabber.calls, [(10, 20, 240, 30)])   # 한 번만 캡처
+        states = {}
+        while not events.empty():
+            e = events.get()
+            if e[0] == "status":
+                states[e[1]] = e[2]
+        self.assertEqual(states[cfg.rois[1].id], "pending")
+        self.assertEqual(states[cfg.rois[0].id], "ok")
 
     def test_disabled_roi_not_captured(self):
         cfg = config.AppConfig()

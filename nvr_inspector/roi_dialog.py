@@ -81,7 +81,7 @@ class RoiDialog:
         combo = ttk.Combobox(box, textvariable=self.v_kind, state="readonly", width=36,
                              values=[detectors.DETECTORS[k]["label"] for k in detectors.DETECTOR_ORDER])
         combo.grid(row=0, column=1, sticky="we", pady=2)
-        combo.bind("<<ComboboxSelected>>", lambda _e: self._rebuild_params(use_saved=False))
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._on_kind_changed())
 
         self.help_label = ttk.Label(box, text="", foreground="#555555", wraplength=380, justify="left")
         self.help_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
@@ -137,6 +137,13 @@ class RoiDialog:
         ttk.Label(box, text="개별 Webhook을 비우면 [설정]의 공통 Webhook으로 보냅니다.\n"
                             "담당자별로 다른 채팅방에 보내려면 여기에 해당 흐름의 URL을 넣으세요.",
                   foreground="#555555", justify="left").grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+    def _on_kind_changed(self):
+        self._rebuild_params(use_saved=False)
+        # 흐르는 라인용 유형은 한 화면만 이상이어도 바로 알림 (기본값을 그대로 둔 경우에만 변경)
+        if self._kind() in ("match", "shape") and self.v_duration.get().strip() in ("5", "5.0"):
+            self.v_duration.set("0")
+            self.v_recovery.set(False)
 
     def _kind(self) -> str:
         return _LABEL_TO_KIND.get(self.v_kind.get(), "black")
@@ -245,7 +252,7 @@ class RoiDialog:
             return
         self._regrab()
         state: dict = {}
-        ref = worker.load_references(roi.id) if roi.detector in detectors.REFERENCE_KINDS else None
+        ref = worker.load_for_detector(roi.id, roi.detector)
         res = None
         for frame in frames:
             res = detectors.evaluate(roi.detector, roi.params, frame, state, reference=ref)

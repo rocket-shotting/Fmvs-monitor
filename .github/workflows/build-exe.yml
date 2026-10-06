@@ -25,6 +25,9 @@ jobs:
         working-directory: nvr_inspector
         run: python -c "import winutil, capture, gui, roi_dialog, roi_editor, settings_dialog, alert; print('imports ok')"
 
+      - name: GUI smoke test (모든 창 생성/동작)
+        run: python tests/smoke_gui.py
+
       - name: Build EXE
         run: python -m PyInstaller --noconfirm --clean "NVR_흑변_검출기.spec"
 

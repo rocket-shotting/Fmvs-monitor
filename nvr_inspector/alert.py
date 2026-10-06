@@ -4,12 +4,13 @@ import os
 import tkinter as tk
 from typing import Dict
 
+import detectors
 import notifier
 import winutil
 
 _RED = "#c62828"
 _GREEN = "#2e7d32"
-_WIDTH = 420
+_WIDTH = 460
 
 
 class AlertPopup:
@@ -48,7 +49,11 @@ class AlertPopup:
         buttons = tk.Frame(inner, bg="white", pady=6)
         buttons.pack(fill="x")
         tk.Button(buttons, text="확인", width=10, command=self.close).pack(side="right", padx=10)
-        self.snapshot_btn = tk.Button(buttons, text="스냅샷 보기", width=12, command=self._open_snapshot)
+        self.snapshot_btn = tk.Button(buttons, text="스냅샷 보기", width=10, command=self._open_snapshot)
+        # 경보 화면을 바로 샘플로 등록 (오탐이면 OK, 실제 불량이면 NG)
+        self.ok_btn = tk.Button(buttons, text="OK로 등록(오탐)", command=lambda: self._register("ok"))
+        self.ng_btn = tk.Button(buttons, text="NG로 등록", command=lambda: self._register("ng"))
+        self._raw = None
         self._snapshot = None
         self._drag = (0, 0)
 
@@ -83,10 +88,33 @@ class AlertPopup:
             if snap and os.path.exists(snap) and hasattr(os, "startfile"):
                 self._snapshot = snap
                 self.snapshot_btn.pack(side="right")
+            raw = info.get("raw_snapshot")
+            detector = info.get("roi_detector")
+            if raw and os.path.exists(raw) and detector in detectors.REFERENCE_KINDS \
+                    and self.manager.on_register is not None:
+                self._raw = raw
+                for btn in (self.ok_btn, self.ng_btn):
+                    btn.configure(state="normal")
+                self.ng_btn.configure(text="NG로 등록")
+                self.ok_btn.configure(text="OK로 등록(오탐)")
+                if detector == "match":
+                    self.ng_btn.pack(side="left", padx=(10, 2))
+                self.ok_btn.pack(side="left", padx=(10 if detector != "match" else 2, 2))
         self.body.configure(text="\n".join(lines))
         self.win.deiconify()
         self.win.lift()
         self.win.attributes("-topmost", True)
+
+    def _register(self, cls: str):
+        if not self._raw:
+            return
+        error = self.manager.on_register(self.roi_id, cls, self._raw)
+        btn = self.ok_btn if cls == "ok" else self.ng_btn
+        if error:
+            btn.configure(text="등록 실패")
+            self.body.configure(text=self.body.cget("text") + f"\n⚠ {error}")
+        else:
+            btn.configure(text="등록됨 ✔", state="disabled")
 
     def _open_snapshot(self):
         if self._snapshot and os.path.exists(self._snapshot):
@@ -109,8 +137,10 @@ class AlertPopup:
 
 
 class AlertManager:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, on_register=None):
+        """on_register(roi_id, cls, raw_path) -> 오류 메시지('' = 성공)."""
         self.root = root
+        self.on_register = on_register
         self.popups: Dict[str, AlertPopup] = {}
         self.sound_enabled = True
 

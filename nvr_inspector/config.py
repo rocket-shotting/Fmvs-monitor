@@ -68,6 +68,10 @@ class AppConfig:
     minimize_on_start: bool = True
     show_overlay: bool = True          # 검출 중 화면에 ROI 위치/상태 표시
     show_badge: bool = True            # 검출 중 화면 모서리에 '동작 중' 배지 표시
+    agent_auto_restart: bool = True    # 에이전트: 검출 엔진이 오류로 멈추면 자동 재시작
+    agent_escalation: bool = True      # 에이전트: 동시다발/연속 불량 추론 결과를 Teams로 전송
+    shift_times: str = "08:00,20:00"   # 교대 시각 – 이때 근무 리포트 자동 작성
+    report_to_teams: bool = True       # 근무 리포트 요약을 Teams로 전송
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)
 
@@ -131,6 +135,10 @@ def config_from_dict(d: dict) -> AppConfig:
     cfg.minimize_on_start = bool(d.get("minimize_on_start", True))
     cfg.show_overlay = bool(d.get("show_overlay", True))
     cfg.show_badge = bool(d.get("show_badge", True))
+    cfg.agent_auto_restart = bool(d.get("agent_auto_restart", True))
+    cfg.agent_escalation = bool(d.get("agent_escalation", True))
+    cfg.shift_times = str(d.get("shift_times", "08:00,20:00") or "")
+    cfg.report_to_teams = bool(d.get("report_to_teams", True))
     cfg.pc_label = str(d.get("pc_label") or socket.gethostname())
     seen = set()
     for item in d.get("rois") or []:

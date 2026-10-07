@@ -144,8 +144,99 @@ def main():
     assert app.tree.set(roi.id, "state") == gui.STATE_TEXT["moving"]
     app.monitor = None
 
+    # ---- 대시보드 + 에이전트: 데모 데이터로 화면을 채우고 캡처 (CI 아티팩트로 확인) ----
+    demo_dashboard(app)
+
     root.destroy()
     print("GUI smoke test OK")
+
+
+def _tab(h, w, x, fold=0.0, bend=0, seed=0, bg=40, fg=190):
+    rng = np.random.default_rng(seed)
+    img = np.full((h, w), bg, dtype=np.float32)
+    tw, th, y = w // 6, int(h * 0.6), int(h * 0.2)
+    img[y + int(th * fold):y + th, x:x + tw] = fg
+    if bend:
+        img[y:y + th // 2, :] = bg
+        img[y:y + th // 2, x + bend:x + bend + tw] = fg
+    img += rng.normal(0, 5, img.shape)
+    g = np.clip(img, 0, 255).astype(np.uint8)
+    return np.stack([g, g, np.clip(g.astype(int) + 12, 0, 255).astype(np.uint8)], axis=2)
+
+
+def demo_dashboard(app):
+    import time as _time
+    root = app.root
+    root.deiconify()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    root.geometry(f"{min(1560, sw)}x{min(940, sh - 40)}+0+0")   # CI 화면 크기에 맞춤
+    app.cfg.rois[:] = []
+    names = ["1라인 탭 A", "1라인 탭 B", "2라인 노칭", "2라인 와인딩", "3라인 탭 A", "3라인 탭 B", "검사기 HMI", "4라인 컨베이어"]
+    kinds = ["match", "match", "shape", "match", "match", "shape", "black", "match"]
+    for i, (name, kind) in enumerate(zip(names, kinds)):
+        app.cfg.rois.append(config.ROI(name=name, x=100 + i * 10, y=100, w=320, h=180, detector=kind,
+                                       still_only=kind != "black", assignee="홍길동" if i % 2 else "김담당"))
+    app.monitor = object.__new__(worker.Monitor)
+    app.agent.boot(app.cfg.rois, {r.id: 6 for r in app.cfg.rois})
+    app._update_running_ui()
+    states = [("ok", "[정지 판정 10:41:07] OK와 일치: 거리 0.08 ≤ 허용 0.41(자동)"),
+              ("ok", "[정지 판정 10:41:09] OK와 일치: 거리 0.11 ≤ 허용 0.43(자동)"),
+              ("moving", "움직임 – 정지 대기 (변화량 18.4 > 3)"),
+              ("alarm", "[정지 판정 10:41:10] NG 샘플과 가장 비슷 (OK 0.71 · NG 0.18)"),
+              ("ok", "[정지 판정 10:41:02] OK와 일치: 거리 0.06 ≤ 허용 0.39(자동)"),
+              ("ok", "[정지 판정 10:40:58] 형상 차이 0.4% (기준 ≥5%)"),
+              ("ok", "어두운 픽셀 2.1% (기준 ≥95%)"),
+              ("skip", "다른 화면: explorer.exe")]
+    for i, (roi, (state, detail)) in enumerate(zip(app.cfg.rois, states)):
+        frame = _tab(180, 320, 120 + (i * 13) % 60, fold=0.4 if state == "alarm" else 0.0, seed=i)
+        app.events.put(("frame", roi.id, frame))
+        for _ in range(3 + i * 7):
+            app.agent.on_status(roi.id, "ok", "x")
+        app.events.put(("status", roi.id, state, detail))
+    now = _time.time()
+    for k, h in enumerate((9, 7, 5, 3, 1)):
+        app.agent.clock = lambda t=now - h * 3600: t
+        for _ in range(k % 3 + 1):
+            app.agent.on_alert({"roi_id": app.cfg.rois[3].id, "roi_name": app.cfg.rois[3].name,
+                                "kind": "alert", "detail": "NG 샘플과 가장 비슷"})
+    app.agent.clock = _time.time
+    app.agent.started_at = now - 3 * 3600 - 17 * 60
+    app.agent.on_feedback(app.cfg.rois[0].name, "ok", 0.41, 0.44)
+    for r in app.cfg.rois[:4]:
+        app.agent.on_alert({"roi_id": r.id, "roi_name": r.name, "kind": "alert", "detail": "NG"})
+    app._poll_events()
+    assert app.wall.cards[app.cfg.rois[0].id].has_frame, "카메라 월 썸네일 미표시"
+    app.trend.draw(app.agent.hourly_series(12))
+    app._refresh_kpis()
+    for _ in range(4):
+        app._heartbeat()
+    root.update()
+    _time.sleep(0.5)
+    root.update()
+    feed_text = app.feed.text.get("1.0", "end")
+    assert "비전 에이전트 기동" in feed_text and "판단" in feed_text, feed_text[:300]
+    report = app.generate_report(auto=True)
+    assert report and os.path.exists(report)
+
+    out = os.path.join(ROOT, "ci_artifacts")
+    os.makedirs(out, exist_ok=True)
+    try:
+        from capture import Grabber
+        root.lift()
+        root.attributes("-topmost", True)
+        root.update()
+        _time.sleep(0.5)
+        x, y, w, h = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
+        with Grabber() as g:
+            shot = g.grab(x, y, w, h)
+        from PIL import Image
+        Image.fromarray(shot).save(os.path.join(out, "dashboard_preview.png"))
+        print(f"대시보드 캡처 저장: {w}x{h}")
+    except Exception as e:      # 캡처는 참고용 – 실패해도 테스트는 통과
+        print(f"대시보드 캡처 실패: {e}")
+    import shutil
+    shutil.copy(report, os.path.join(out, "report_preview.html"))
+    app.monitor = None
 
 
 if __name__ == "__main__":

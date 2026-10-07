@@ -1,4 +1,4 @@
-"""NVR 화면 이상 검출기 진입점."""
+"""NVR Vision Agent 진입점."""
 import logging
 import os
 import sys
@@ -33,7 +33,7 @@ def main() -> int:
         from tkinter import messagebox
         r = tk.Tk()
         r.withdraw()
-        messagebox.showwarning("NVR 화면 이상 검출기", "이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인하세요.")
+        messagebox.showwarning("NVR Vision Agent", "이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인하세요.")
         r.destroy()
         return 1
     logging.getLogger("main").info("프로그램 시작 (경로: %s)", paths.BASE_DIR)

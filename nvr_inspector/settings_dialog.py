@@ -57,6 +57,23 @@ class SettingsDialog:
                               "※ URL에 인증 서명이 들어 있으니 외부에 공유하지 마세요.",
                   foreground="#555555", justify="left").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
+        agent_box = ttk.LabelFrame(body, text="비전 에이전트 (PC 내부에서만 동작)", padding=8)
+        agent_box.pack(fill="x", pady=(8, 0))
+        self.v_restart = tk.BooleanVar(value=cfg.agent_auto_restart)
+        self.v_escalation = tk.BooleanVar(value=cfg.agent_escalation)
+        self.v_shift = tk.StringVar(value=cfg.shift_times)
+        self.v_report_teams = tk.BooleanVar(value=cfg.report_to_teams)
+        ttk.Checkbutton(agent_box, text="검출 엔진이 오류로 멈추면 자동 재시작 (시간당 최대 3회)",
+                        variable=self.v_restart).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(agent_box, text="동시다발 이상(화면 전체 문제)·연속 불량(설비 점검) 판단을 Teams로 전송",
+                        variable=self.v_escalation).grid(row=1, column=0, columnspan=2, sticky="w")
+        ttk.Label(agent_box, text="교대 시각 (근무 리포트 자동 작성, 쉼표 구분)").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Entry(agent_box, textvariable=self.v_shift, width=24).grid(row=2, column=1, sticky="w", padx=6)
+        ttk.Checkbutton(agent_box, text="근무 리포트 요약을 Teams로 전송", variable=self.v_report_teams).grid(
+            row=3, column=0, columnspan=2, sticky="w")
+        ttk.Label(agent_box, text="예: 08:00,20:00 · 비우면 자동 리포트 안 함 · 리포트는 reports 폴더에 HTML로 저장",
+                  foreground="#555555").grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(10, 0))
         ttk.Button(btns, text="저장", width=12, command=self._save).pack(side="right", padx=(6, 0))
@@ -93,6 +110,16 @@ class SettingsDialog:
         c.minimize_on_start = self.v_minimize.get()
         c.show_overlay = self.v_overlay.get()
         c.show_badge = self.v_badge.get()
+        shifts = [t.strip() for t in self.v_shift.get().split(",") if t.strip()]
+        for t in shifts:
+            hh, _sep, mm = t.partition(":")
+            if not (hh.isdigit() and mm.isdigit() and int(hh) < 24 and int(mm) < 60):
+                messagebox.showerror("입력 오류", f"교대 시각 형식이 올바르지 않습니다: {t} (예: 08:00)", parent=self.top)
+                return
+        c.agent_auto_restart = self.v_restart.get()
+        c.agent_escalation = self.v_escalation.get()
+        c.shift_times = ",".join(shifts)
+        c.report_to_teams = self.v_report_teams.get()
         c.teams_enabled = self.v_teams.get()
         c.webhook_url = url
         self.result = c

@@ -8,3 +8,5 @@ settings.v1.bak.json
 logs/
 refs/
 snapshots/
+reports/
+ci_artifacts/

@@ -97,6 +97,27 @@ def build_payload(kind: str, *, roi_name: str, detector_label: str, detail: str,
     }
 
 
+def build_agent_payload(title: str, message: str, *, pc_label: str, when: str) -> dict:
+    """에이전트 판단(동시다발 이상·연속 불량·반복 장애)과 근무 리포트 요약용 메시지."""
+    full_title = f"🧠 NVR 비전 에이전트 – {title}"
+    facts = [("PC", pc_label), ("시각", when)]
+    return {
+        "event": "agent",
+        "title": full_title,
+        "message": message,
+        "roi_name": "",
+        "detector": "",
+        "detail": message,
+        "assignee": "",
+        "assignee_email": "",
+        "pc": pc_label,
+        "time": when,
+        "elapsed_sec": None,
+        "type": "message",
+        "attachments": [_card(full_title, "Warning", facts, message)],
+    }
+
+
 def post_json(url: str, payload: dict, timeout: float = TIMEOUT_SEC) -> int:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST",

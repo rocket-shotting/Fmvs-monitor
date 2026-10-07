@@ -33,6 +33,14 @@ jobs:
       - name: Build EXE
         run: python -m PyInstaller --noconfirm --clean "NVR_흑변_검출기.spec"
 
+      - name: Upload dashboard preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard_preview
+          path: ci_artifacts/
+          if-no-files-found: ignore
+
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:

@@ -16,10 +16,11 @@ SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 REF_DIR = os.path.join(BASE_DIR, "refs")
 SNAPSHOT_DIR = os.path.join(BASE_DIR, "snapshots")
+REPORT_DIR = os.path.join(BASE_DIR, "reports")
 
 
 def ensure_dirs() -> None:
-    for d in (LOG_DIR, REF_DIR, SNAPSHOT_DIR):
+    for d in (LOG_DIR, REF_DIR, SNAPSHOT_DIR, REPORT_DIR):
         os.makedirs(d, exist_ok=True)
 
 

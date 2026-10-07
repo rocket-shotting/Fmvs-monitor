@@ -30,6 +30,8 @@ log = logging.getLogger(__name__)
 _ERROR_LOG_INTERVAL = 60.0   # 같은 ROI의 같은 오류는 1분에 한 번만 로그
 _UNION_MIN_ROIS = 4          # ROI가 이 개수 이상이면 전체 영역을 한 번에 캡처해서 잘라 쓴다
 _UNION_MAX_PIXELS = 16_000_000
+THUMB_INTERVAL = 1.0         # 대시보드 썸네일 전송 간격(초)
+THUMB_MAX_SIDE = 320
 
 
 def now_text() -> str:
@@ -84,6 +86,7 @@ class RoiRuntime:
         self.still_count = 0
         self.inspected = False          # 이번 정지에서 이미 판정했는지
         self.last_result = ("wait", "")  # 이번 정지의 판정 결과 (상태, 상세)
+        self.last_frame_sent = 0.0       # 대시보드 썸네일 전송 시각
         self.last_error = ""
         self.last_error_at = 0.0
 
@@ -100,6 +103,7 @@ class Monitor(threading.Thread):
         self._refs: Dict[str, tuple] = {}   # roi_id -> ((파일, 수정시각)…, 배열 목록)
         self._clock = time.time              # 테스트에서 교체 가능
         self._union = None                   # (x0, y0, 전체 캡처) – 한 번에 캡처한 화면
+        self.send_frames = False             # 대시보드 썸네일 전송 여부
 
     # ---- GUI에서 호출 ----
     def update_config(self, cfg: AppConfig) -> None:
@@ -210,6 +214,7 @@ class Monitor(threading.Thread):
 
         # 2) 캡처 + 판정
         frame = self._grab(roi, grabber)
+        self._send_thumbnail(roi, rt, frame)
         if roi.still_only and roi.detector != "frozen":
             self._check_on_stop(cfg, roi, rt, frame)
             return
@@ -245,6 +250,17 @@ class Monitor(threading.Thread):
             self._fire(cfg, roi, kind, res.detail, elapsed, snapshot, raw)
             rt.alerted, rt.last_alert = True, now
         self._emit("status", roi.id, "alarm", f"{res.detail} · {notifier.fmt_duration(elapsed)} 지속")
+
+    def _send_thumbnail(self, roi: ROI, rt: RoiRuntime, frame: np.ndarray) -> None:
+        """대시보드 카메라 월에 띄울 축소 이미지 (ROI당 초당 1회 이하)."""
+        if not self.send_frames:
+            return
+        now = time.monotonic()
+        if now - rt.last_frame_sent < THUMB_INTERVAL:
+            return
+        rt.last_frame_sent = now
+        step = max(1, -(-max(frame.shape[:2]) // THUMB_MAX_SIDE))
+        self._emit("frame", roi.id, np.ascontiguousarray(frame[::step, ::step]))
 
     def _check_on_stop(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, frame: np.ndarray) -> None:
         """움직이는 동안은 판정하지 않고, 정지가 확인된 순간 1회만 판정한다.

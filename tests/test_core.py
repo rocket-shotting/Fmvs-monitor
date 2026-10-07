@@ -11,6 +11,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "nvr_inspector"))
 
+import agent  # noqa: E402
 import config  # noqa: E402
 import detectors  # noqa: E402
 import notifier  # noqa: E402
@@ -237,6 +238,105 @@ class SamplePathTests(unittest.TestCase):
             self.assertEqual(os.listdir(d), [])
 
 
+class FakeClock:
+    def __init__(self, t=1_760_000_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+class AgentTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = FakeClock()
+        self.ag = agent.VisionAgent(clock=self.clock)
+        self.rois = [config.ROI(name=f"cam{i}") for i in range(4)]
+        self.ag.boot(self.rois, {r.id: 2 for r in self.rois})
+
+    def alert(self, roi, kind="alert"):
+        return self.ag.on_alert({"roi_id": roi.id, "roi_name": roi.name, "kind": kind, "detail": "NG"})
+
+    def kinds(self):
+        return [f.kind for f in self.ag.feed]
+
+    def test_boot_feed(self):
+        self.assertEqual(self.kinds()[0], "boot")
+        self.assertIn("ROI 4개", self.ag.feed[0].text)
+
+    def test_mass_alarm_inferred_once(self):
+        self.assertEqual(self.alert(self.rois[0]), [])
+        self.clock.t += 3
+        self.assertEqual(self.alert(self.rois[1]), [])
+        self.clock.t += 3
+        actions = self.alert(self.rois[2])                       # 15초 안에 3/4개
+        self.assertEqual([a.kind for a in actions], ["teams"])
+        self.assertIn("화면 전체", actions[0].title)
+        self.clock.t += 2
+        self.assertEqual(self.alert(self.rois[3]), [])            # 쿨다운
+        self.assertIn("think", self.kinds())
+
+    def test_trend_escalation(self):
+        roi = self.rois[0]
+        self.assertEqual(self.alert(roi), [])
+        self.clock.t += 120
+        self.assertEqual(self.alert(roi), [])
+        self.clock.t += 120
+        actions = self.alert(roi)                                 # 10분 안에 3회
+        self.assertEqual(len(actions), 1)
+        self.assertIn("설비 점검", actions[0].title)
+        self.assertEqual(self.ag.stats[roi.id].ng, 3)
+        self.assertEqual(sum(c for _h, c in self.ag.hourly_series()), 3)
+
+    def test_skip_persistence_diagnosis(self):
+        roi = self.rois[0]
+        self.ag.on_status(roi.id, "skip", "다른 화면: explorer.exe")
+        self.clock.t += 61
+        self.ag.on_status(roi.id, "skip", "다른 화면: explorer.exe")
+        self.assertTrue(any("가려졌거나" in f.text for f in self.ag.feed))
+
+    def test_inspection_counting(self):
+        roi = self.rois[0]
+        for _ in range(3):
+            self.ag.on_status(roi.id, "ok", "어두운 픽셀 1%")         # 연속 판정: 매번 1회
+        self.ag.on_status(roi.id, "ok", "[정지 판정 10:00:00] OK")
+        self.ag.on_status(roi.id, "ok", "[정지 판정 10:00:00] OK")  # 같은 정지 결과 유지: 안 셈
+        self.ag.on_status(roi.id, "moving", "움직임")
+        self.assertEqual(self.ag.stats[roi.id].inspections, 4)
+        self.alert(roi)
+        k = self.ag.kpis()
+        self.assertEqual((k["inspections"], k["ng"]), (4, 1))
+        self.assertAlmostEqual(k["ok_rate"], 75.0)
+
+    def test_auto_restart_limited(self):
+        for i in range(agent.RESTART_LIMIT):
+            self.clock.t += 60
+            self.assertEqual([a.kind for a in self.ag.on_monitor_stopped("오류로 중지됨: x", True)], ["restart"])
+        self.clock.t += 60
+        self.assertEqual([a.kind for a in self.ag.on_monitor_stopped("오류로 중지됨: x", True)], ["teams"])
+        self.assertEqual(self.ag.on_monitor_stopped("사용자 중지", True), [])
+        self.clock.t += 3600 * 2
+        self.assertEqual([a.kind for a in self.ag.on_monitor_stopped("오류로 중지됨: x", True)], ["restart"])
+        self.assertEqual(self.ag.on_monitor_stopped("오류로 중지됨: x", False), [])
+
+    def test_shift_due_once(self):
+        from datetime import datetime
+        self.clock.t = datetime(2026, 10, 7, 8, 0, 30).timestamp()
+        self.assertEqual(self.ag.due_shift("08:00, 20:00"), "2026-10-07 08:00")
+        self.assertIsNone(self.ag.due_shift("08:00,20:00"))
+        self.clock.t = datetime(2026, 10, 7, 9, 0, 0).timestamp()
+        self.assertIsNone(self.ag.due_shift("08:00,20:00,bad,25:99"))
+
+    def test_report_and_feedback(self):
+        self.ag.on_status(self.rois[0].id, "ok", "x")
+        self.alert(self.rois[1])
+        self.ag.on_feedback("cam1", "ok", 0.42, 0.47)
+        html_text = self.ag.report_html("리포트 <테스트>", self.rois)
+        self.assertIn("&lt;테스트&gt;", html_text)
+        self.assertIn("cam1", html_text)
+        self.assertIn("재보정 0.42 ↑ 0.47", html_text)
+        self.assertIn("NG 1건", self.ag.report_summary())
+
+
 class ConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -407,6 +507,19 @@ class WorkerFlowTests(unittest.TestCase):
         events, _ = self.run_ticks(cfg, [noise(seed=1), dark, dark, dark, dark], [0.0, 1.0, 2.0, 3.0, 4.0])
         states = [e[2] for e in events if e[0] == "status"]
         self.assertEqual(states, ["moving", "moving", "moving", "moving", "alarm"])
+
+    def test_thumbnails_sent_when_enabled(self):
+        cfg = config.AppConfig()
+        cfg.rois.append(config.ROI(name="cam", w=640, h=480))
+        events = queue.Queue()
+        mon = worker.Monitor(cfg, events, mock.Mock())
+        mon.send_frames = True
+        grabber = FakeGrabber([noise(480, 640), noise(480, 640)])
+        mon._tick(cfg, grabber)
+        mon._tick(cfg, grabber)                                  # 1초 안 → 다시 보내지 않음
+        frames = [e for e in list(events.queue) if e[0] == "frame"]
+        self.assertEqual(len(frames), 1)
+        self.assertLessEqual(max(frames[0][2].shape[:2]), worker.THUMB_MAX_SIDE)
 
     def test_disabled_roi_not_captured(self):
         cfg = config.AppConfig()

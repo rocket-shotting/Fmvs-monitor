@@ -70,15 +70,15 @@ DETECTORS["shape"] = {
     "help": "정상 제품 화면을 [기준 이미지 저장]으로 저장해 두면, 대상(탭)의 윤곽을 기준과 겹쳐 비교합니다.\n"
             "접힘·휨·찢어짐·찍힘으로 모양이 달라진 면적이 기준 이상이면 불량으로 판단합니다.\n"
             "· 위치가 조금 어긋나도 자동으로 맞춰 비교합니다 (회전은 소폭만 허용).\n"
-            "· 정상품 기준 이미지를 여러 장 추가하면, 가장 비슷한 기준과 비교해 오탐이 줄어듭니다.\n"
+            "· OK(정상품) 여러 장, NG(불량품), 무시(제품 없음) 샘플을 등록하면 가장 비슷한 쪽으로 판정합니다.\n"
             "· 제품이 흘러가는 라인이면 '이상 지속 시간'을 0~1초로, 제품 감지 최소 면적을 설정하세요.",
     "params": [
         ("polarity", "대상(탭) 밝기", "choice", "auto", SHAPE_POLARITY, None),
         ("max_defect", "형상 차이 기준 (%, 이 값 이상이면 불량)", "float", 5.0, 0.1, 100.0),
-        ("max_shift", "위치 허용 범위 (ROI 크기 대비 %)", "float", 10.0, 0.0, 40.0),
+        ("max_shift", "위치 허용 범위 (ROI 크기 대비 %, 상하좌우 이동)", "float", 20.0, 0.0, 40.0),
         ("edge_tol", "경계 허용 오차 (픽셀, 0~3)", "float", 1.0, 0.0, 3.0),
         ("max_texture", "표면 차이 기준 (구김·긁힘, 0 = 사용 안 함)", "float", 0.0, 0.0, 5.0),
-        ("min_presence", "제품 감지 최소 면적 (기준 대비 %, 0 = 항상 판정)", "float", 0.0, 0.0, 100.0),
+        ("min_presence", "제품 감지 최소 면적 (기준 대비 %, 이보다 작으면 제품 없음)", "float", 30.0, 0.0, 100.0),
     ],
 }
 
@@ -92,7 +92,7 @@ DETECTORS["match"] = {
             "OK 허용 거리를 0으로 두면 샘플들로 자동 계산합니다. 흐르는 라인은 이상 지속 시간 0초를 권장합니다.",
     "params": [
         ("ok_threshold", "OK 허용 거리 (0 = 샘플로 자동 계산)", "float", 0.0, 0.0, 3.0),
-        ("max_shift", "위치 허용 범위 (ROI 크기 대비 %)", "float", 15.0, 0.0, 45.0),
+        ("max_shift", "위치 허용 범위 (ROI 크기 대비 %, 상하좌우 이동)", "float", 20.0, 0.0, 45.0),
     ],
 }
 
@@ -163,8 +163,11 @@ def block_mean(gray: np.ndarray, grid: int = _REF_GRID) -> np.ndarray:
 def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
              reference=None) -> Result:
     """state: ROI별로 유지되는 dict (화면 정지 검출의 직전 프레임 보관용).
-    reference: 기준 이미지 배열 1장 또는 여러 장의 리스트 (정상품 여러 장 → 가장 비슷한 것과 비교)."""
-    if reference is None or isinstance(reference, dict):
+    reference: 기준 이미지 1장 / 여러 장의 리스트(OK) / {'ok': [...], 'ng': [...], 'skip': [...]} 샘플."""
+    samples = reference if isinstance(reference, dict) else None
+    if samples is not None:
+        refs = [r for r in samples.get("ok", []) if r is not None]
+    elif reference is None:
         refs = []
     elif isinstance(reference, np.ndarray):
         refs = [reference]
@@ -175,8 +178,9 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
     p = normalize_params(kind, params)
     if rgb.size == 0:
         return Result(None, 0.0, "캡처 영역이 비어 있음")
+    if samples is None:
+        samples = {"ok": refs}
     if kind == "match":
-        samples = reference if isinstance(reference, dict) else {"ok": refs}
         return _evaluate_match(p, rgb, samples, state)
     small = subsample(rgb)
 
@@ -214,17 +218,28 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
                       f"색상({r},{g},{b}) 픽셀 {ratio * 100:.1f}% (기준 ≥{p['ratio'] * 100:.0f}%)")
 
     if not refs:
-        return Result(None, 0.0, "기준 이미지 없음 – [기준 이미지 저장] 필요")
-    refs = [r for r in refs if r.shape[:2] == rgb.shape[:2]]
+        return Result(None, 0.0, "기준(OK) 이미지 없음 – [샘플/기준 이미지]에서 정상품을 등록하세요")
+    same = lambda arrs: [a for a in arrs if a is not None and a.shape[:2] == rgb.shape[:2]]  # noqa: E731
+    refs, ngs, skips = same(refs), same(samples.get("ng", [])), same(samples.get("skip", []))
     if not refs:
-        return Result(None, 0.0, "ROI 크기가 바뀜 – 기준 이미지를 다시 저장하세요")
+        return Result(None, 0.0, "ROI 크기가 바뀜 – 샘플/기준 이미지를 다시 등록하세요")
+
+    # 무시(제품 없음·이동 중) 샘플과 가장 비슷하면 판정하지 않는다
+    if skips:
+        near = nearest_appearance(rgb, {"ok": refs, "ng": ngs, "skip": skips}, state, 20.0)
+        if near["skip"] < min(near["ok"], near.get("ng", float("inf"))):
+            return Result(None, near["ok"], f"제품 없음 – 무시 샘플과 가장 비슷 (판정 보류 · 무시 {near['skip']:.2f} / OK {near['ok']:.2f})")
 
     if kind == "shape":
-        return _evaluate_shape(p, rgb, refs)
+        return _evaluate_shape(p, rgb, refs, ngs)
 
-    # reference: 여러 장 중 가장 비슷한 기준과의 차이
+    # reference: 여러 장 중 가장 비슷한 기준과의 차이 (NG 샘플이 더 비슷하면 불량)
     cur = block_mean(to_gray(rgb))
     diff = min(float(np.abs(cur - block_mean(to_gray(r))).mean()) for r in refs)
+    if ngs:
+        diff_ng = min(float(np.abs(cur - block_mean(to_gray(r))).mean()) for r in ngs)
+        if diff_ng < diff:
+            return Result(True, diff, f"NG 샘플과 가장 비슷 (NG 차이 {diff_ng:.1f} < OK 차이 {diff:.1f})")
     suffix = f" · 기준 {len(refs)}장 중 최소" if len(refs) > 1 else ""
     return Result(diff >= p["max_diff"], diff,
                   f"기준 대비 차이 {diff:.1f} (기준 ≥{p['max_diff']:.1f}){suffix}")
@@ -376,7 +391,10 @@ def _upscale_mask(small: np.ndarray, factor: int, shape) -> np.ndarray:
     return out
 
 
-def _evaluate_shape(p: dict, rgb: np.ndarray, refs) -> Result:
+_NO_OBJECT_PCT = 5.0    # 대상 면적이 기준의 5% 미만이면 무조건 '대상 없음'
+
+
+def _evaluate_shape(p: dict, rgb: np.ndarray, refs, ngs=()) -> Result:
     cur_gray = to_gray(rgb)
     best = None
     errors = []
@@ -394,9 +412,21 @@ def _evaluate_shape(p: dict, rgb: np.ndarray, refs) -> Result:
     if best is None:
         return Result(None, 0.0, errors[0])
 
-    if p["min_presence"] > 0 and best["presence"] < p["min_presence"]:
+    min_presence = max(p["min_presence"], _NO_OBJECT_PCT)
+    if best["presence"] < min_presence:
         return Result(None, best["presence"],
-                      f"제품 없음 (대상 면적 {best['presence']:.0f}% < {p['min_presence']:.0f}%) – 판정 보류")
+                      f"제품 없음 (대상 면적 {best['presence']:.0f}% < {min_presence:.0f}%) – 판정 보류")
+
+    # NG 샘플과 형상이 더 비슷하면 불량 (등록한 불량 유형과 일치)
+    best_ng = None
+    for ng in ngs:
+        r = compare_shape(cur_gray, to_gray(ng), p)
+        if not isinstance(r, str) and (best_ng is None or r["defect"] < best_ng["defect"]):
+            best_ng = r
+    if best_ng is not None and best_ng["defect"] < best["defect"] and best_ng["defect"] < p["max_defect"]:
+        mask = _upscale_mask(best["map"], best["factor"], rgb.shape) if best["map"].any() else None
+        return Result(True, best["defect"],
+                      f"NG 샘플과 형상 일치 (NG 차이 {best_ng['defect']:.1f}% < OK 차이 {best['defect']:.1f}%)", mask)
 
     parts = [f"형상 차이 {best['defect']:.1f}% (기준 ≥{p['max_defect']:g}%)"]
     if p["max_texture"] > 0:
@@ -589,3 +619,65 @@ def motion_amount(prev: Optional[np.ndarray], cur: np.ndarray) -> Optional[float
     if prev is None or prev.shape != cur.shape:
         return None
     return float(np.abs(cur - prev).mean())
+
+
+# ===================== 샘플 공통: 외관 거리 / 자체 검증 =====================
+
+def nearest_appearance(rgb: np.ndarray, groups: dict, state: dict, max_shift_pct: float) -> dict:
+    """클래스별 샘플 중 가장 가까운 외관 거리 (밝기 정규화 + 위치 정렬). 샘플 전처리는 state에 캐시."""
+    key = (tuple((c, tuple(id(a) for a in groups.get(c, []))) for c in SAMPLE_CLASSES),
+           rgb.shape[:2], max_shift_pct)
+    cached = state.get("appearance_cache")
+    if not cached or cached[0] != key:
+        prepared = {}
+        for cls, arrs in groups.items():
+            grays = [_match_gray(a) for a in arrs]
+            prepared[cls] = [_Spectra(g, _fft_shape(g.shape)) for g in grays]
+        state["appearance_cache"] = cached = (key, prepared)
+    g = _match_gray(rgb)
+    cur = _Spectra(g, _fft_shape(g.shape))
+    out = {}
+    for cls, specs in cached[1].items():
+        if specs:
+            out[cls] = min(match_distance(cur, spec, max_shift_pct)[0] for spec in specs)
+    out.setdefault("ok", float("inf"))
+    return out
+
+
+def self_check(kind: str, params: dict, samples: dict) -> dict:
+    """등록된 샘플로 판정 로직을 스스로 검증 (각 샘플을 빼고 나머지로 판정 – leave-one-out).
+    반환: {'ok': (오탐 수, 검사 수), 'ng': (놓침 수, 검사 수), 'skip': (판정해버린 수, 검사 수), 'summary': str}"""
+    result = {}
+    for cls in SAMPLE_CLASSES:
+        items = samples.get(cls, [])
+        wrong = tested = 0
+        for i, img in enumerate(items):
+            rest = {c: [a for j, a in enumerate(samples.get(c, [])) if not (c == cls and j == i)]
+                    for c in SAMPLE_CLASSES}
+            if not rest["ok"]:
+                continue
+            r = evaluate(kind, params, img, {}, reference=rest)
+            tested += 1
+            if cls == "ok" and r.abnormal:
+                wrong += 1
+            elif cls == "ng" and not r.abnormal:
+                wrong += 1
+            elif cls == "skip" and r.abnormal is not None:
+                wrong += 1
+        result[cls] = (wrong, tested)
+    parts = []
+    labels = {"ok": ("OK", "오탐"), "ng": ("NG", "놓침"), "skip": ("무시", "판정함")}
+    for cls, (wrong, tested) in result.items():
+        if tested:
+            name, bad = labels[cls]
+            parts.append(f"{name} {tested - wrong}/{tested} 맞춤" + (f" ({bad} {wrong})" if wrong else ""))
+    good = all(w == 0 for w, t in result.values())
+    if not parts:
+        summary = "자체 검증: OK 샘플을 2장 이상 등록하면 판정 정확도를 스스로 검증합니다"
+    else:
+        summary = ("✔ 자체 검증 통과: " if good else "⚠ 자체 검증: ") + " · ".join(parts)
+        if not good:
+            summary += " – 샘플을 추가하거나 기준값을 조정하세요"
+    result["summary"] = summary
+    result["passed"] = good and bool(parts)
+    return result

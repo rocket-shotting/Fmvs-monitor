@@ -147,10 +147,34 @@ class ShapeDetectorTests(unittest.TestCase):
         ref = tab_image(seed=1)
         empty = tab_image(th=0, seed=2)
         self.assertIsNone(self.ev(empty, ref, min_presence=50).abnormal)
-        self.assertTrue(self.ev(empty, ref).abnormal)          # 감지 조건 없으면 '없음'도 불량
+        self.assertIsNone(self.ev(empty, ref).abnormal)        # 제품(셀)이 없으면 항상 판정 보류
         flat = np.full((240, 320, 3), 90, dtype=np.uint8)
         self.assertIsNone(self.ev(tab_image(seed=2), flat).abnormal)
         self.assertIsNone(self.ev(tab_image(seed=2), None).abnormal)
+
+    def test_ng_and_skip_samples(self):
+        ok = [tab_image(seed=1), tab_image(x=140, seed=2)]
+        ng_bend = tab_image(bend=12, seed=3)
+        empty = tab_image(th=0, seed=4)
+        samples = {"ok": ok, "ng": [ng_bend], "skip": [empty]}
+        same_ng = self.ev(tab_image(bend=12, x=134, seed=5), samples, max_defect=30)   # 기준이 느슨해도
+        self.assertTrue(same_ng.abnormal, same_ng.detail)                              # 등록 NG와 일치 → 불량
+        self.assertIn("NG 샘플", same_ng.detail)
+        self.assertFalse(self.ev(tab_image(x=136, seed=6), samples).abnormal)
+        held = self.ev(tab_image(th=0, bg=36, seed=7), samples)
+        self.assertIsNone(held.abnormal)
+        self.assertIn("제품 없음", held.detail)
+
+    def test_self_check(self):
+        samples = {"ok": [tab_image(seed=i, x=128 + i * 4) for i in range(3)],
+                   "ng": [tab_image(fold=0.4, seed=10), tab_image(bend=20, seed=11)],
+                   "skip": [tab_image(th=0, seed=12), tab_image(th=0, seed=13)]}
+        r = detectors.self_check("shape", {}, samples)
+        self.assertTrue(r["passed"], r["summary"])
+        self.assertEqual(r["ng"], (0, 2))
+        bad = detectors.self_check("shape", {"max_defect": 90}, samples)
+        self.assertFalse(bad["passed"])
+        self.assertIn("놓침", bad["summary"])
 
     def test_texture_option(self):
         ref = tab_image(seed=1)
@@ -498,6 +522,20 @@ class WorkerFlowTests(unittest.TestCase):
                                   "moving", "moving", "alarm"])
         kinds = [e[0] for e in events if e[0] in ("alert", "recover")]
         self.assertEqual(kinds, ["alert", "recover", "alert"])
+
+    def test_still_empty_screen_not_judged(self):
+        """셀이 없는 정지 화면은 판정하지 않고, 셀이 들어와 멈추면 판정."""
+        roi = config.ROI(name="cell", detector="shape", w=320, h=240, still_only=True, still_frames=1)
+        cfg = config.AppConfig()
+        cfg.rois.append(roi)
+        empty, cell, folded = tab_image(th=0, seed=1), tab_image(seed=2), tab_image(fold=0.4, seed=3)
+        with mock.patch.object(worker.Monitor, "_references",
+                               return_value={"ok": [tab_image(seed=9)], "ng": [], "skip": []}):
+            events, _ = self.run_ticks(cfg, [empty, empty, empty, cell, cell, empty, folded, folded],
+                                       [float(i) for i in range(8)])
+        states = [e[2] for e in events if e[0] == "status"]
+        self.assertEqual(states, ["moving", "wait", "wait", "moving", "ok", "moving", "moving", "alarm"])
+        self.assertEqual([e[0] for e in events if e[0] in ("alert", "recover")], ["alert"])
 
     def test_still_frames_requires_consecutive_stillness(self):
         roi = config.ROI(name="line", still_only=True, still_diff=3.0, still_frames=3)

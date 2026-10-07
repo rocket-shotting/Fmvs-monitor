@@ -55,11 +55,9 @@ def load_samples(roi_id: str) -> Dict[str, List[np.ndarray]]:
 
 
 def load_for_detector(roi_id: str, detector: str):
-    """검출 유형에 맞는 기준/샘플 이미지 (형상·기준화면: OK 목록, 매칭: 클래스별 dict)."""
-    if detector == "match":
-        return load_samples(roi_id)
+    """검출 유형에 맞는 샘플 이미지 – 매칭·형상·기준화면 모두 OK/NG/무시 클래스별 dict."""
     if detector in detectors.REFERENCE_KINDS:
-        return load_references(roi_id)
+        return load_samples(roi_id)
     return None
 
 
@@ -188,7 +186,7 @@ class Monitor(threading.Thread):
 
     def _references(self, roi: ROI):
         """기준/샘플 이미지 (파일이 바뀌었을 때만 다시 읽음)."""
-        classes = list(detectors.SAMPLE_CLASSES) if roi.detector == "match" else ["ok"]
+        classes = list(detectors.SAMPLE_CLASSES)
         files = [f for c in classes for f in paths.reference_paths(roi.id, c)]
         try:
             key = (roi.detector, tuple((f, os.path.getmtime(f)) for f in files))

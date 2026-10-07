@@ -57,7 +57,8 @@ class App:
         self.events: "queue.Queue" = queue.Queue()
         self.teams = notifier.TeamsNotifier(self._report_threadsafe)
         self.monitor: Optional[worker.Monitor] = None
-        self.alerts = alert.AlertManager(self.root, on_register=self.register_sample)
+        self.alerts = alert.AlertManager(self.root, on_register=self.register_sample,
+                                         avoid_rects=lambda: [(r.x, r.y, r.w, r.h) for r in self.cfg.rois if r.enabled])
         self.states: Dict[str, tuple] = {}
         self.overlay = overlay.ScreenOverlay(self.root)
         self._last_status = 0.0      # 검출 스레드가 마지막으로 상태를 보낸 시각 (응답 없음 감지)

@@ -27,6 +27,7 @@ import worker  # noqa: E402
 config.load = lambda path=None: config.AppConfig()     # 실제 settings.json 건드리지 않음
 config.save = lambda cfg, path=None: None
 
+import alert  # noqa: E402
 import gui  # noqa: E402
 import roi_dialog  # noqa: E402
 import samples_dialog  # noqa: E402
@@ -72,6 +73,7 @@ def main():
     shape_roi = config.ROI(name="형상", w=160, h=120, detector="shape")
     sd = samples_dialog.SamplesDialog(root, shape_roi)
     root.update()
+    assert set(sd.sections) == {"ok", "ng", "skip"}, "형상 검사에서도 OK/NG/무시 등록 가능해야 함"
     sd.top.destroy()
 
     # 설정 창
@@ -89,8 +91,29 @@ def main():
     root.update()
     popup = app.alerts.popups[roi.id]
     popup._register("ng")
-    assert popup.ng_btn.cget("text") == "등록됨 ✔", popup.ng_btn.cget("text")
+    assert popup.reg_buttons["ng"].cget("text") == "등록됨 ✔", popup.reg_buttons["ng"].cget("text")
     assert len(paths.reference_paths(roi.id, "ng")) == 1
+    popup._register("skip")
+    assert len(paths.reference_paths(roi.id, "skip")) == 1
+    assert popup.when_label.cget("text") == "now"            # 탐지 시각 표시
+    app.alerts.alert(dict(info, time="2026-10-07 10:00:05"))
+    assert "탐지 2회" in popup.history_label.cget("text"), popup.history_label.cget("text")
+
+    # 팝업은 감시 ROI 좌표를 피해서 배치
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    blockers = [config.ROI(name=f"b{i}", x=520, y=i * 160, w=sw - 520, h=150) for i in range(sh // 160)]
+    app.cfg.rois.extend(blockers)
+    app.alerts.close_all()
+    app.alerts.alert(dict(info, roi_id="pp"))
+    root.update()
+    px, py, pw, ph = app.alerts.popups["pp"].rect()
+    for b in blockers + [roi]:
+        overlap = alert._overlap((px, py, pw, ph), (b.x, b.y, b.w, b.h))
+        assert overlap == 0, f"팝업이 ROI {b.name}를 가림: popup={(px, py, pw, ph)}"
+    print(f"팝업 위치 {px},{py} – ROI와 겹치지 않음")
+    for b in blockers:
+        app.cfg.rois.remove(b)
+    assert alert.find_free_spot(100, 50, (0, 0, 1000, 800), [(0, 0, 1000, 800)]) is not None
     app.alerts.recover(dict(info, kind="recover"))
     root.update()
     app.alerts.close_all()

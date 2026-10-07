@@ -26,23 +26,21 @@ class SamplesDialog:
         self.master = master
         self.roi = roi
         self.is_match = roi.detector == "match"
-        self.classes = (dict(detectors.SAMPLE_CLASSES) if self.is_match
-                        else {"ok": "기준 이미지 (정상품)"})
+        self.classes = {"ok": "OK (정상품 – 기준)", "ng": "NG (불량품)",
+                        "skip": "무시 (셀 없음·이동 중·가려짐 – 판정하지 않을 화면)"}
         self._photos: List[ImageTk.PhotoImage] = []
         self.sections: Dict[str, dict] = {}
 
         top = self.top = tk.Toplevel(master)
         top.title(f"샘플 이미지 – {roi.name}  (ROI {roi.w}×{roi.h})")
-        top.geometry("820x640" if self.is_match else "820x330")
+        top.geometry("860x700")
         top.minsize(600, 300)
         body = ttk.Frame(top, padding=10)
         body.pack(fill="both", expand=True)
 
         hint = ("현재 화면 또는 파일(과거 NG 사진 등)에서 이미지를 등록합니다. 파일은 ROI 크기에 맞춰 저장됩니다.\n"
-                "· OK: 정상 제품 (모양·위치 편차가 있으면 여러 장)   · NG: 불량 제품   "
-                "· 무시: 제품 없음/이동 중/가려짐 등 판정하지 않을 화면"
-                if self.is_match else
-                "정상 제품 화면을 등록합니다. 정상품의 모양 편차가 있으면 여러 장 등록하면 가장 비슷한 것과 비교합니다.")
+                "· OK: 정상 제품 (위치·모양 편차가 있으면 여러 장)   · NG: 불량 제품 (접힘·찍힘·휨 등 유형별로)\n"
+                "· 무시: 셀이 없을 때·이동 중·가려진 화면 – 이것과 비슷하면 판정하지 않습니다 (빈 화면 오탐 방지)")
         ttk.Label(body, text=hint, foreground="#555555", justify="left").pack(fill="x", pady=(0, 6))
 
         for cls, label in self.classes.items():
@@ -111,28 +109,33 @@ class SamplesDialog:
         ttk.Button(cell, text="삭제", width=6, command=lambda: self._delete_one(path)).pack()
 
     def _update_calibration(self):
-        if not self.is_match:
-            n = len(paths.reference_paths(self.roi.id, "ok"))
-            self.calib_label.configure(text=f"기준 이미지 {n}장" if n else "⚠ 기준 이미지가 없어 판정하지 않습니다.",
-                                       foreground="#1b5e20" if n else "#b71c1c")
-            return
         samples = worker.load_samples(self.roi.id)
         if not samples["ok"]:
-            self.calib_label.configure(text="⚠ OK 샘플이 없어 판정하지 않습니다. OK 이미지를 먼저 등록하세요.",
+            self.calib_label.configure(text="⚠ OK(정상품) 샘플이 없어 판정하지 않습니다. OK 이미지를 먼저 등록하세요.",
                                        foreground="#b71c1c")
             return
+        lines = []
+        warn = False
         try:
-            p = detectors.normalize_params("match", self.roi.params)
-            calib = detectors.match_calibration(samples, (self.roi.h, self.roi.w), p["max_shift"])
+            self.calib_label.configure(text="샘플로 판정 정확도 자체 검증 중…", foreground="#555555")
+            self.top.update_idletasks()
+            if self.is_match:
+                p = detectors.normalize_params("match", self.roi.params)
+                calib = detectors.match_calibration(samples, (self.roi.h, self.roi.w), p["max_shift"])
+                manual = p["ok_threshold"] > 0
+                lines.append(f"자동 계산 OK 허용 거리: {calib['threshold']:.2f}"
+                             + (f"  (이 ROI는 수동 값 {p['ok_threshold']:.2f} 사용 중)" if manual else "  ← 현재 사용 중"))
+                lines.append(calib["quality"])
+                warn = calib["quality"].startswith("⚠")
+            check = detectors.self_check(self.roi.detector, self.roi.params, samples)
+            lines.append(check["summary"])
+            warn = warn or check["summary"].startswith("⚠")
         except Exception as e:
-            self.calib_label.configure(text=f"자동 기준 계산 실패: {e}", foreground="#b71c1c")
-            return
-        manual = p["ok_threshold"] > 0
-        text = (f"자동 계산 OK 허용 거리: {calib['threshold']:.2f}"
-                + (f"  (이 ROI는 수동 값 {p['ok_threshold']:.2f} 사용 중)" if manual else "  ← 현재 사용 중")
-                + f"\n{calib['quality']}")
-        color = "#b71c1c" if calib["quality"].startswith("⚠") else "#1b5e20"
-        self.calib_label.configure(text=text, foreground=color)
+            lines.append(f"자체 검증 실패: {e}")
+            warn = True
+        if not samples["skip"] and self.roi.still_only:
+            lines.append("💡 셀이 없을 때 화면을 '무시'로 1장 이상 등록하면 빈 화면 오탐이 사라집니다.")
+        self.calib_label.configure(text="\n".join(lines), foreground="#b71c1c" if warn else "#1b5e20")
 
     # ---------- 추가/삭제 ----------
     def _add_from_screen(self, cls: str):

@@ -15,6 +15,7 @@ import paths
 log = logging.getLogger(__name__)
 
 CONFIG_VERSION = 2
+MAX_RETENTION_DAYS = 15
 
 
 def new_roi_id() -> str:
@@ -72,6 +73,10 @@ class AppConfig:
     agent_escalation: bool = True      # 에이전트: 동시다발/연속 불량 추론 결과를 Teams로 전송
     shift_times: str = "08:00,20:00"   # 교대 시각 – 이때 근무 리포트 자동 작성
     report_to_teams: bool = True       # 근무 리포트 요약을 Teams로 전송
+    popup_consecutive: int = 1         # 같은 ROI에서 연속 n회 이상(NG) 판정되면 팝업 표시
+    retention_days: int = 15           # 로그·스냅샷·리포트 보관 기간(일), 최대 15일
+    mini_monitor: bool = True          # 검출 시작 시 화면 하단에 ROI 트렌드 미니 모니터 표시
+    mini_position: str = "auto"        # auto | right | left (하단 오른쪽/왼쪽)
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)
 
@@ -139,6 +144,11 @@ def config_from_dict(d: dict) -> AppConfig:
     cfg.agent_escalation = bool(d.get("agent_escalation", True))
     cfg.shift_times = str(d.get("shift_times", "08:00,20:00") or "")
     cfg.report_to_teams = bool(d.get("report_to_teams", True))
+    cfg.popup_consecutive = max(1, min(99, _to_int(d.get("popup_consecutive"), 1)))
+    cfg.retention_days = max(1, min(MAX_RETENTION_DAYS, _to_int(d.get("retention_days"), MAX_RETENTION_DAYS)))
+    cfg.mini_monitor = bool(d.get("mini_monitor", True))
+    pos = str(d.get("mini_position") or "auto")
+    cfg.mini_position = pos if pos in ("auto", "right", "left") else "auto"
     cfg.pc_label = str(d.get("pc_label") or socket.gethostname())
     seen = set()
     for item in d.get("rois") or []:

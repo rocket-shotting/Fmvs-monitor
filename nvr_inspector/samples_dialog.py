@@ -176,7 +176,7 @@ class SamplesDialog:
                 f"ROI({target[0]}×{target[1]})와 가로세로 비율이 다른 이미지가 있습니다:\n"
                 + "\n".join(mismatched[:8]) +
                 "\n\nROI 크기로 늘려서 저장하면 판정이 부정확할 수 있습니다.\n"
-                "NVR 화면에서 ROI 영역만 잘라낸 이미지를 권장합니다. 그래도 등록할까요?", parent=self.top):
+                "FMVS 화면에서 ROI 영역만 잘라낸 이미지를 권장합니다. 그래도 등록할까요?", parent=self.top):
             return
         for rgb in loaded:
             if rgb.size != target:

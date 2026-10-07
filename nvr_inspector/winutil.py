@@ -136,7 +136,7 @@ def is_passthrough(hwnd) -> bool:
 def process_name_at(x: int, y: int):
     """화면 좌표 (x, y)에 보이는 창의 실행 파일명(예: NVR_VIEWER.exe).
 
-    창 핸들(HWND)은 NVR 프로그램이 내부적으로 창을 다시 만들면 바뀌므로
+    창 핸들(HWND)은 FMVS 프로그램이 내부적으로 창을 다시 만들면 바뀌므로
     프로세스 단위로 비교해야 오탐이 없다. 화면 표시 오버레이는 건너뛴다. 알 수 없으면 None."""
     root = window_at(x, y)
     if not root:
@@ -156,6 +156,18 @@ def make_overlay_window(widget_id: int) -> bool:
     style = _GetWindowLongPtr(hwnd, _GWL_EXSTYLE)
     _SetWindowLongPtr(hwnd, _GWL_EXSTYLE, style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT
                       | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE)
+    _passthrough_hwnds.add(hwnd)
+    return bool(_user32.SetWindowDisplayAffinity(hwnd, _WDA_EXCLUDEFROMCAPTURE))
+
+
+def make_capture_excluded(widget_id: int) -> bool:
+    """클릭은 되지만 화면 캡처에는 찍히지 않는 창 (미니 모니터용).
+    ROI 위에 놓여도 캡처에서 제외되고, 대상 프로그램 확인에서도 건너뛰므로 판정에 영향이 없다."""
+    if not IS_WINDOWS:
+        return False
+    hwnd = _user32.GetAncestor(widget_id, _GA_ROOT) or widget_id
+    style = _GetWindowLongPtr(hwnd, _GWL_EXSTYLE)
+    _SetWindowLongPtr(hwnd, _GWL_EXSTYLE, style | _WS_EX_TOOLWINDOW)
     _passthrough_hwnds.add(hwnd)
     return bool(_user32.SetWindowDisplayAffinity(hwnd, _WDA_EXCLUDEFROMCAPTURE))
 

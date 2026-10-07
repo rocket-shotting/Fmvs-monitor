@@ -156,7 +156,7 @@ class ScreenOverlay:
         self.badge_bg = self.canvas.create_rectangle(x - ox, y - oy, x - ox + w, y - oy + h,
                                                      fill="#1b5e20", outline="#ffffff", width=1)
         self.badge_text = self.canvas.create_text(x - ox + 10, y - oy + h // 2, anchor="w",
-                                                  fill="white", font=_BADGE_FONT, text="NVR 검출 시작 중…")
+                                                  fill="white", font=_BADGE_FONT, text="FMVS 검출 시작 중…")
 
     def heartbeat(self, ok: bool, roi_count: int, alarm_count: int):
         """0.5초마다 호출: 배지 갱신 + 경보 ROI 깜빡임."""
@@ -171,10 +171,10 @@ class ScreenOverlay:
         dot = "●" if self._blink else "○"
         now = f"{datetime.now():%H:%M:%S}"
         if not ok:
-            text, fill = f"⚠ NVR 검출기 응답 없음 · {now}", "#b71c1c"
+            text, fill = f"⚠ FMVS 검출기 응답 없음 · {now}", "#b71c1c"
         elif alarm_count:
-            text, fill = f"{dot} NVR 검출 중 · 경보 {alarm_count}건 · {now}", "#c62828"
+            text, fill = f"{dot} FMVS 검출 중 · 경보 {alarm_count}건 · {now}", "#c62828"
         else:
-            text, fill = f"{dot} NVR 검출 중 · ROI {roi_count}개 · {now}", "#1b5e20"
+            text, fill = f"{dot} FMVS 검출 중 · ROI {roi_count}개 · {now}", "#1b5e20"
         self.canvas.itemconfigure(self.badge_text, text=text)
         self.canvas.itemconfigure(self.badge_bg, fill=fill)

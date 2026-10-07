@@ -156,6 +156,38 @@ def main():
     assert not ov.visible()
     app.cfg.rois.remove(probe)
 
+    # 연속 NG 팝업 조건: 3회부터 팝업, OK 판정이 나오면 초기화
+    app.alerts.close_all()
+    app.cfg.popup_consecutive = 3
+    app.monitor = object.__new__(worker.Monitor)
+    for i in range(2):
+        app.events.put(("alert", dict(info, roi_id=roi.id, time=f"t{i}")))
+        app._poll_events()
+    assert roi.id not in app.alerts.popups, "연속 2회인데 팝업이 뜸"
+    app.events.put(("alert", dict(info, roi_id=roi.id, time="t3")))
+    app._poll_events()
+    assert roi.id in app.alerts.popups and "연속 NG 3회" in app.alerts.popups[roi.id].body.cget("text")
+    app.events.put(("status", roi.id, "ok", "OK"))
+    app._poll_events()
+    assert app.consecutive[roi.id] == 0
+    app.alerts.close_all()
+    app.cfg.popup_consecutive = 1
+    app.monitor = None
+
+    # 미니 모니터 (화면 하단 ROI 트렌드): 표시·캡처 제외·대상 프로그램 확인에서 제외
+    app.mini.show(app.agent.roi_trends(app.cfg.rois), "auto", [])
+    app.mini.update(app.agent.roi_trends(app.cfg.rois), "● 실시간 감시 중", True)
+    root.update()
+    assert app.mini.visible()
+    mx, my = app.mini.win.winfo_x(), app.mini.win.winfo_y()
+    assert my > root.winfo_screenheight() // 2, f"미니 모니터가 하단에 있지 않음: y={my}"
+    print(f"미니 모니터 위치 {mx},{my} · 캡처 제외 {app.mini.capture_excluded}")
+    hid = winutil.window_at(mx + 30, my + 40)
+    assert not hid or not winutil.is_passthrough(hid)
+    app.mini.hide()
+    app.roi_trend.draw(app.agent.roi_trends(app.cfg.rois))
+    root.update()
+
     # 상태 이벤트 처리 + 로그
     app.monitor = object.__new__(worker.Monitor)   # 실행 중인 것처럼 상태 표시만 확인
     app.events.put(("status", roi.id, "alarm", "테스트 상세"))
@@ -236,10 +268,16 @@ def demo_dashboard(app):
     root.update()
     _time.sleep(0.5)
     root.update()
+    app.log("warning", "시스템 로그 통합 확인")
     feed_text = app.feed.text.get("1.0", "end")
     assert "비전 에이전트 기동" in feed_text and "판단" in feed_text, feed_text[:300]
+    assert "시스템 로그 통합 확인" in feed_text
+    app._sync_mini()
+    app._refresh_trends()
+    root.update()
     report = app.generate_report(auto=True)
     assert report and os.path.exists(report)
+    assert "data:image/jpeg;base64," in open(report, encoding="utf-8").read(), "리포트에 이미지 없음"
 
     out = os.path.join(ROOT, "ci_artifacts")
     os.makedirs(out, exist_ok=True)

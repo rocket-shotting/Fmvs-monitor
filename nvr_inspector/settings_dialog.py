@@ -5,6 +5,7 @@ from tkinter import messagebox, ttk
 from typing import Optional
 
 import notifier
+import config as cfgmod
 from config import AppConfig
 from ui_util import modal
 
@@ -74,6 +75,28 @@ class SettingsDialog:
         ttk.Label(agent_box, text="예: 08:00,20:00 · 비우면 자동 리포트 안 함 · 리포트는 reports 폴더에 HTML로 저장",
                   foreground="#555555").grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
+        ops = ttk.LabelFrame(body, text="팝업 · 미니 모니터 · 보관", padding=8)
+        ops.pack(fill="x", pady=(8, 0))
+        self.v_consec = tk.StringVar(value=str(cfg.popup_consecutive))
+        self.v_retention = tk.StringVar(value=str(cfg.retention_days))
+        self.v_mini = tk.BooleanVar(value=cfg.mini_monitor)
+        self.v_mini_pos = tk.StringVar(value={"auto": "자동 (ROI와 덜 겹치는 쪽)", "right": "오른쪽 하단",
+                                              "left": "왼쪽 하단"}[cfg.mini_position])
+        ttk.Label(ops, text="연속 이상 발생 시 팝업 – 같은 ROI에서 연속 몇 회 NG면 팝업 (1~99)").grid(
+            row=0, column=0, sticky="w", pady=2)
+        ttk.Spinbox(ops, from_=1, to=99, textvariable=self.v_consec, width=6).grid(row=0, column=1, sticky="w", padx=6)
+        ttk.Checkbutton(ops, text="검출 시작 시 화면 하단에 ROI 트렌드 미니 모니터 표시", variable=self.v_mini).grid(
+            row=1, column=0, sticky="w")
+        ttk.Combobox(ops, textvariable=self.v_mini_pos, state="readonly", width=24,
+                     values=["자동 (ROI와 덜 겹치는 쪽)", "오른쪽 하단", "왼쪽 하단"]).grid(row=1, column=1, sticky="w", padx=6)
+        ttk.Label(ops, text=f"로그·스냅샷·리포트 보관 기간 (일, 최대 {cfgmod.MAX_RETENTION_DAYS}일)").grid(
+            row=2, column=0, sticky="w", pady=2)
+        ttk.Spinbox(ops, from_=1, to=cfgmod.MAX_RETENTION_DAYS, textvariable=self.v_retention, width=6).grid(
+            row=2, column=1, sticky="w", padx=6)
+        ttk.Label(ops, text="연속 횟수는 NG 판정마다 1씩 오르고, OK 판정이 나오면 0으로 돌아갑니다. "
+                            "Teams 알림은 이 설정과 무관하게 판정마다 전송됩니다.",
+                  foreground="#555555", wraplength=560, justify="left").grid(row=3, column=0, columnspan=2, sticky="w")
+
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(10, 0))
         ttk.Button(btns, text="저장", width=12, command=self._save).pack(side="right", padx=(6, 0))
@@ -120,6 +143,20 @@ class SettingsDialog:
         c.agent_escalation = self.v_escalation.get()
         c.shift_times = ",".join(shifts)
         c.report_to_teams = self.v_report_teams.get()
+        try:
+            consec = int(self.v_consec.get())
+            retention = int(self.v_retention.get())
+        except ValueError:
+            messagebox.showerror("입력 오류", "연속 횟수와 보관 기간은 숫자로 입력하세요.", parent=self.top)
+            return
+        if not 1 <= consec <= 99 or not 1 <= retention <= cfgmod.MAX_RETENTION_DAYS:
+            messagebox.showerror("입력 오류", f"연속 횟수는 1~99, 보관 기간은 1~{cfgmod.MAX_RETENTION_DAYS}일이어야 합니다.",
+                                 parent=self.top)
+            return
+        c.popup_consecutive = consec
+        c.retention_days = retention
+        c.mini_monitor = self.v_mini.get()
+        c.mini_position = {"오른쪽 하단": "right", "왼쪽 하단": "left"}.get(self.v_mini_pos.get(), "auto")
         c.teams_enabled = self.v_teams.get()
         c.webhook_url = url
         self.result = c

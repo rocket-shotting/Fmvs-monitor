@@ -1,8 +1,8 @@
-"""NVR Vision Agent 진입점."""
+"""FMVS Vision Agent 진입점."""
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 
 # PyInstaller/직접 실행 모두 같은 폴더의 모듈을 import 하도록
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -13,8 +13,9 @@ import winutil  # noqa: E402
 
 def setup_logging() -> None:
     paths.ensure_dirs()
-    handler = RotatingFileHandler(os.path.join(paths.LOG_DIR, "nvr_inspector.log"),
-                                  maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    # 자정마다 새 파일, 최대 15일치만 보관 (보관 기간 정리와 별도로 이중 안전장치)
+    handler = TimedRotatingFileHandler(os.path.join(paths.LOG_DIR, "fmvs_agent.log"), when="midnight",
+                                       backupCount=15, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(threadName)s %(name)s: %(message)s"))
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -33,7 +34,7 @@ def main() -> int:
         from tkinter import messagebox
         r = tk.Tk()
         r.withdraw()
-        messagebox.showwarning("NVR Vision Agent", "이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인하세요.")
+        messagebox.showwarning("FMVS Vision Agent", "이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인하세요.")
         r.destroy()
         return 1
     logging.getLogger("main").info("프로그램 시작 (경로: %s)", paths.BASE_DIR)

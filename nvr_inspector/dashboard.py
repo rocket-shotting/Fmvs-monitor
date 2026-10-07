@@ -266,8 +266,9 @@ class CameraWall(tk.Frame):
 
 
 class FeedPanel(tk.Frame):
+    """에이전트 활동 + 시스템 로그 통합 스트림."""
     COLORS = {"boot": T["accent"], "observe": "#93c5fd", "think": "#c4b5fd", "act": T["amber"],
-              "learn": T["green"], "warn": T["red"]}
+              "learn": T["green"], "warn": T["red"], "sys": T["muted"], "error": T["red"]}
     MAX_LINES = 400
 
     def __init__(self, master):
@@ -276,9 +277,10 @@ class FeedPanel(tk.Frame):
         head.pack(fill="x", padx=12, pady=(10, 4))
         self.dot = tk.Label(head, text="●", bg=T["panel"], fg=T["dim"], font=(F, 10))
         self.dot.pack(side="left")
-        tk.Label(head, text=" AGENT ACTIVITY", bg=T["panel"], fg=T["text"],
+        tk.Label(head, text=" AGENT ACTIVITY · SYSTEM LOG", bg=T["panel"], fg=T["text"],
                  font=("Segoe UI", 11, "bold")).pack(side="left")
-        tk.Label(head, text="관찰 → 판단 → 실행 → 학습", bg=T["panel"], fg=T["muted"], font=(F, 8)).pack(side="right")
+        tk.Label(head, text="에이전트 관찰·판단·실행·학습 + 시스템 기록", bg=T["panel"], fg=T["muted"],
+                 font=(F, 8)).pack(side="right")
         body = tk.Frame(self, bg=T["panel"])
         body.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 10))
         self.text = tk.Text(body, bg=T["panel"], fg=T["text"], font=(F, 9), wrap="word", relief="flat",
@@ -293,7 +295,7 @@ class FeedPanel(tk.Frame):
         self.text.tag_configure("body", foreground=T["text"])
 
     def add(self, item: FeedItem):
-        icon, name = FEED_KINDS.get(item.kind, ("•", item.kind))
+        icon, name = FEED_KINDS.get(item.kind, SYS_KINDS.get(item.kind, ("•", item.kind)))
         t = self.text
         t.configure(state="normal")
         t.insert("end", datetime.fromtimestamp(item.when).strftime("%H:%M:%S "), "time")
@@ -307,6 +309,210 @@ class FeedPanel(tk.Frame):
 
     def pulse(self, running: bool, on: bool):
         self.dot.configure(fg=(T["green"] if on else "#14532d") if running else T["dim"])
+
+
+SYS_KINDS = {"sys": ("·", "로그"), "error": ("✖", "오류")}
+
+
+def draw_roi_rows(canvas: tk.Canvas, trends, x0: int, y0: int, width: int, row_h: int, max_rows: int,
+                  compact: bool = False):
+    """ROI별 한 줄: 상태 점 · 이름 · 최근 NG 수 · 시간대별 NG 막대. 그린 줄 수를 반환."""
+    shown = trends[:max_rows]
+    name_w = 120 if compact else 150
+    count_w = 46
+    for i, t in enumerate(shown):
+        y = y0 + i * row_h
+        cy = y + row_h // 2
+        if i % 2 == 0:
+            canvas.create_rectangle(x0, y, x0 + width, y + row_h, fill="#0f1830", outline="")
+        state = t["state"] if t["enabled"] else "off"
+        canvas.create_oval(x0 + 6, cy - 4, x0 + 14, cy + 4, fill=STATE_COLORS.get(state, T["sky"]), outline="")
+        name = t["name"] if len(t["name"]) <= 14 else t["name"][:13] + "…"
+        canvas.create_text(x0 + 20, cy, anchor="w", text=name, fill=T["text"], font=(F, 9 if not compact else 8))
+        canvas.create_text(x0 + name_w + count_w - 6, cy, anchor="e", text=str(t["recent"]),
+                           fill=T["red"] if t["recent"] else T["dim"], font=("Segoe UI", 10, "bold"))
+        bx0, bx1 = x0 + name_w + count_w, x0 + width - 6
+        series = t["series"]
+        peak = max([c for _h, c in series] + [1])
+        slot = (bx1 - bx0) / max(1, len(series))
+        for j, (_hour, c) in enumerate(series):
+            bx = bx0 + slot * j
+            bh = (row_h - 8) * c / peak if c else 2
+            canvas.create_rectangle(bx + 1, y + row_h - 4 - bh, bx + slot - 1, y + row_h - 4,
+                                    fill=T["red"] if c else T["border"], outline="")
+    return len(shown)
+
+
+class RoiTrendPanel(tk.Canvas):
+    """ROI별 NG 추이 (최근 12시간, 시간대별) – 메인 화면 오른쪽."""
+    ROW_H = 30
+
+    def __init__(self, master, on_select: Optional[Callable] = None):
+        super().__init__(master, bg=T["panel"], highlightthickness=1, highlightbackground=T["border"])
+        self.trends: List[dict] = []
+        self.on_select = on_select
+        self.bind("<Configure>", lambda _e: self._redraw())
+        self.bind("<Button-1>", self._click)
+
+    def draw(self, trends):
+        self.trends = trends
+        self._redraw()
+
+    def _redraw(self):
+        self.delete("all")
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 120 or h < 80:
+            return
+        self.create_text(14, 16, anchor="w", text="ROI MONITORING", fill=T["text"], font=("Segoe UI", 11, "bold"))
+        self.create_text(w - 14, 16, anchor="e", text="ROI별 NG 추이 · 최근 12시간", fill=T["muted"], font=(F, 8))
+        self.create_text(14 + 150 + 40, 38, anchor="e", text="NG", fill=T["muted"], font=(F, 8))
+        if self.trends:
+            hours = self.trends[0]["series"]
+            bx0, bx1 = 14 + 150 + 46, w - 20
+            slot = (bx1 - bx0) / max(1, len(hours))
+            for j, (hour, _c) in enumerate(hours):
+                if j % 3 == 0:
+                    self.create_text(bx0 + slot * (j + 0.5), 38, text=f"{hour}시", fill=T["dim"], font=("Segoe UI", 7))
+        else:
+            self.create_text(w // 2, h // 2, text="ROI를 추가하면 여기서 ROI별 NG 추이를 볼 수 있습니다",
+                             fill=T["muted"], font=(F, 9))
+            return
+        max_rows = max(1, (h - 56) // self.ROW_H)
+        n = draw_roi_rows(self, self.trends, 8, 48, w - 16, self.ROW_H, max_rows)
+        if len(self.trends) > n:
+            self.create_text(w // 2, h - 8, text=f"외 {len(self.trends) - n}개 ROI (창을 키우면 더 보입니다)",
+                             fill=T["dim"], font=(F, 8))
+
+    def _click(self, e):
+        idx = (e.y - 48) // self.ROW_H
+        if self.on_select and 0 <= idx < len(self.trends) and e.y >= 48:
+            self.on_select(self.trends[idx]["id"])
+
+
+class MiniMonitor:
+    """검출 중 화면 하단(오른쪽/왼쪽)에 떠 있는 ROI 트렌드 미니 모니터.
+    화면 캡처에서 제외되고 대상 프로그램 확인에서도 건너뛰므로 ROI 위에 있어도 판정에 영향이 없다."""
+    WIDTH = 420
+    ROW_H = 24
+    MAX_ROWS = 14
+
+    def __init__(self, root: tk.Tk, on_open: Callable, on_stop: Callable):
+        self.root = root
+        self.on_open, self.on_stop = on_open, on_stop
+        self.win: Optional[tk.Toplevel] = None
+        self.canvas: Optional[tk.Canvas] = None
+        self.capture_excluded = False
+        self._drag = (0, 0)
+        self.user_moved = False
+        self.trends: List[dict] = []
+        self.status = ("", T["green"])
+
+    def _ensure(self):
+        if self.win is not None:
+            return
+        import winutil
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=T["accent"], padx=1, pady=1)
+        head = tk.Frame(win, bg=T["panel"])
+        head.pack(fill="x")
+        self.title = tk.Label(head, text="◆ FMVS VISION AGENT", bg=T["panel"], fg=T["accent"],
+                              font=("Segoe UI", 10, "bold"), padx=8, pady=4)
+        self.title.pack(side="left")
+        FlatButton(head, "■", self.on_stop, kind="danger", padx=8, pady=2).pack(side="right", padx=(2, 4), pady=3)
+        FlatButton(head, "대시보드 열기", self.on_open, padx=8, pady=2, font=(F, 8, "bold")).pack(side="right", pady=3)
+        self.clock = tk.Label(head, text="", bg=T["panel"], fg=T["text"], font=("Segoe UI", 9, "bold"))
+        self.clock.pack(side="right", padx=6)
+        for w in (head, self.title, self.clock):
+            w.bind("<ButtonPress-1>", self._drag_start)
+            w.bind("<B1-Motion>", self._drag_move)
+        self.canvas = tk.Canvas(win, bg=T["bg"], highlightthickness=0, width=self.WIDTH, height=60)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Double-1>", lambda _e: self.on_open())
+        win.update_idletasks()
+        self.capture_excluded = winutil.make_capture_excluded(win.winfo_id())
+        self.win = win
+
+    def _drag_start(self, e):
+        self._drag = (e.x_root - self.win.winfo_x(), e.y_root - self.win.winfo_y())
+
+    def _drag_move(self, e):
+        self.user_moved = True
+        self.win.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+
+    def show(self, trends, position: str, avoid_rects):
+        self._ensure()
+        self.trends = trends
+        self._redraw()
+        if not self.user_moved:
+            self.win.geometry(f"+{self._x(position, avoid_rects)}+{self._y()}")
+        self.win.deiconify()
+        self.win.attributes("-topmost", True)
+
+    def _height(self):
+        rows = min(len(self.trends), self.MAX_ROWS)
+        return 34 + max(1, rows) * self.ROW_H + (16 if len(self.trends) > self.MAX_ROWS else 0) + 8
+
+    def _y(self):
+        self.win.update_idletasks()
+        return max(0, self.root.winfo_screenheight() - self.win.winfo_reqheight() - 56)
+
+    def _x(self, position: str, avoid_rects):
+        sw = self.root.winfo_screenwidth()
+        right, left = sw - self.WIDTH - 16, 12
+        if position == "right":
+            return right
+        if position == "left":
+            return left
+        h = self._height() + 34
+        y = self.root.winfo_screenheight() - h - 56
+
+        def overlap(x):
+            total = 0
+            for rx, ry, rw, rh in avoid_rects:
+                ow = min(x + self.WIDTH, rx + rw) - max(x, rx)
+                oh = min(y + h, ry + rh) - max(y, ry)
+                total += ow * oh if ow > 0 and oh > 0 else 0
+            return total
+        return right if overlap(right) <= overlap(left) else left
+
+    def hide(self):
+        if self.win is not None:
+            self.win.withdraw()
+
+    def visible(self) -> bool:
+        return self.win is not None and self.win.state() == "normal"
+
+    def update(self, trends, status_text: str, ok: bool):
+        if not self.visible():
+            return
+        self.trends = trends
+        self.status = (status_text, T["green"] if ok else T["red"])
+        self.clock.configure(text=datetime.now().strftime("%H:%M:%S"))
+        self._redraw()
+
+    def _redraw(self):
+        c = self.canvas
+        c.delete("all")
+        h = self._height()
+        c.configure(height=h)
+        text, color = self.status
+        c.create_text(10, 14, anchor="w", text=text or "● 실시간 감시 중", fill=color, font=(F, 9, "bold"))
+        c.create_text(self.WIDTH - 10, 14, anchor="e", text="NG · 최근 12시간", fill=T["muted"], font=(F, 8))
+        if not self.trends:
+            c.create_text(self.WIDTH // 2, 48, text="감시 중인 ROI 없음", fill=T["muted"], font=(F, 9))
+            return
+        n = draw_roi_rows(c, self.trends, 4, 30, self.WIDTH - 8, self.ROW_H, self.MAX_ROWS, compact=True)
+        if len(self.trends) > n:
+            c.create_text(self.WIDTH // 2, 30 + n * self.ROW_H + 8, text=f"외 {len(self.trends) - n}개 ROI",
+                          fill=T["dim"], font=(F, 8))
+
+    def destroy(self):
+        if self.win is not None:
+            self.win.destroy()
+            self.win = None
 
 
 class TrendChart(tk.Canvas):

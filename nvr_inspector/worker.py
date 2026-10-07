@@ -61,6 +61,21 @@ def load_for_detector(roi_id: str, detector: str):
     return None
 
 
+def resize_samples(roi_id: str, w: int, h: int) -> int:
+    """ROI 크기가 바뀌었을 때 샘플/기준 이미지를 새 크기로 맞춘다 (삭제하지 않고 유지). 반환: 바꾼 장수."""
+    from PIL import Image
+    changed = 0
+    for cls in detectors.SAMPLE_CLASSES:
+        for path in paths.reference_paths(roi_id, cls):
+            with Image.open(path) as img:
+                if img.size == (w, h):
+                    continue
+                resized = img.convert("RGB").resize((w, h), Image.LANCZOS)
+            save_png(np.asarray(resized), path)
+            changed += 1
+    return changed
+
+
 def save_png(rgb: np.ndarray, path: str) -> None:
     from PIL import Image
     tmp = path + ".tmp.png"

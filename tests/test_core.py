@@ -361,6 +361,58 @@ class AgentTests(unittest.TestCase):
         self.assertIn("NG 1건", self.ag.report_summary())
 
 
+class HousekeepingAndTrendTests(unittest.TestCase):
+    def test_purge_old_files(self):
+        import housekeeping
+        with tempfile.TemporaryDirectory() as d:
+            old, new = os.path.join(d, "old.png"), os.path.join(d, "new.png")
+            for p in (old, new):
+                open(p, "w").close()
+            now = 1_760_000_000.0
+            os.utime(old, (now - 16 * 86400, now - 16 * 86400))
+            os.utime(new, (now - 14 * 86400, now - 14 * 86400))
+            self.assertEqual(housekeeping.purge_old_files([d, os.path.join(d, "none")], 15, now=now), 1)
+            self.assertEqual(os.listdir(d), ["new.png"])
+
+    def test_roi_trends_and_report_images(self):
+        clock = FakeClock()
+        ag = agent.VisionAgent(clock=clock)
+        rois = [config.ROI(name="A"), config.ROI(name="B")]
+        ag.boot(rois, {})
+        with tempfile.TemporaryDirectory() as d:
+            snap = os.path.join(d, "ng.png")
+            worker.save_png(solid((200, 0, 0), 60, 80), snap)
+            ag.on_alert({"roi_id": rois[0].id, "roi_name": "A", "kind": "alert", "detail": "NG", "snapshot": snap})
+            clock.t += 3600
+            ag.on_alert({"roi_id": rois[0].id, "roi_name": "A", "kind": "alert", "detail": "NG", "snapshot": snap})
+            trends = {t["name"]: t for t in ag.roi_trends(rois)}
+            self.assertEqual((trends["A"]["recent"], trends["B"]["recent"]), (2, 0))
+            self.assertEqual([c for _h, c in trends["A"]["series"]][-2:], [1, 1])
+            html_text = ag.report_html("리포트", rois, frames={rois[1].id: solid(90, 40, 60)})
+            self.assertEqual(html_text.count("data:image/jpeg;base64,"), 3)   # NG 2장 + 현재 화면 1장
+            self.assertIn("NG 탐지 이미지 (2장", html_text)
+        # 스냅샷이 지워져도 리포트 생성은 실패하지 않음
+        self.assertIn("NG 탐지 이미지 (0장", ag.report_html("리포트", rois))
+
+    def test_resize_samples_keeps_files(self):
+        import paths
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(paths, "REF_DIR", d):
+            for cls in ("ok", "ng", "skip"):
+                worker.save_png(noise(100, 200), paths.new_reference_path("r1", cls))
+            self.assertEqual(worker.resize_samples("r1", 150, 80), 3)
+            samples = worker.load_samples("r1")
+            self.assertEqual({a.shape[:2] for v in samples.values() for a in v}, {(80, 150)})
+            self.assertEqual(worker.resize_samples("r1", 150, 80), 0)
+
+    def test_new_settings_clamped(self):
+        cfg = config.config_from_dict({"version": 2, "popup_consecutive": 0, "retention_days": 40,
+                                       "mini_position": "top"})
+        self.assertEqual((cfg.popup_consecutive, cfg.retention_days, cfg.mini_position), (1, 15, "auto"))
+        cfg = config.config_from_dict({"version": 2, "popup_consecutive": 3, "retention_days": 7,
+                                       "mini_position": "left"})
+        self.assertEqual((cfg.popup_consecutive, cfg.retention_days, cfg.mini_position), (3, 7, "left"))
+
+
 class ConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

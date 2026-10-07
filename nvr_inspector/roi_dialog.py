@@ -136,7 +136,7 @@ class RoiDialog:
         ttk.Button(box, text="지금 화면에서 감지", command=self._detect_process).grid(row=0, column=1, padx=(6, 0))
         ttk.Label(box, text="예: NVR_VIEWER.exe  ·  비우면 확인하지 않음\n"
                             "창 핸들이 아닌 프로그램(프로세스) 이름으로 비교하므로\n"
-                            "NVR이 내부적으로 창을 다시 만들어도 오탐이 없습니다.",
+                            "FMVS이 내부적으로 창을 다시 만들어도 오탐이 없습니다.",
                   foreground="#555555", justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
     def _build_contact(self, parent):

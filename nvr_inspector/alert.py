@@ -141,6 +141,8 @@ class AlertPopup:
                      f"담당자: {info.get('assignee') or '미지정'}"]
             if info.get("elapsed"):
                 lines.insert(2, f"지속 시간: {notifier.fmt_duration(info.get('elapsed'))}")
+            if info.get("consecutive", 1) > 1:
+                lines.insert(0, f"연속 NG {info['consecutive']}회")
             snap = info.get("snapshot")
             if snap and os.path.exists(snap) and hasattr(os, "startfile"):
                 self._snapshot = snap

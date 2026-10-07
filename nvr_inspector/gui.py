@@ -15,6 +15,7 @@ import alert
 import config as cfgmod
 import dashboard as db
 import detectors
+import housekeeping
 import notifier
 import overlay
 import paths
@@ -30,8 +31,7 @@ from ui_util import hidden_windows
 
 log = logging.getLogger(__name__)
 
-APP_TITLE = "NVR Vision Agent"
-_MAX_LOG_LINES = 500
+APP_TITLE = "FMVS Vision Agent"
 
 STATE_TEXT = {
     "idle": "-", "ok": "정상", "pending": "이상 감지(확인 중)", "alarm": "🚨 경보",
@@ -64,13 +64,17 @@ class App:
         self._last_status = 0.0      # 검출 스레드가 마지막으로 상태를 보낸 시각 (응답 없음 감지)
         self.agent = agentmod.VisionAgent()
         self._beat = 0
+        self.consecutive: Dict[str, int] = {}     # ROI별 연속 NG 횟수 (팝업 조건)
+        self.latest_frames: Dict[str, object] = {}  # ROI별 최신 화면 (리포트 이미지)
+        self.mini = db.MiniMonitor(self.root, on_open=self._open_dashboard, on_stop=self.stop)
 
         self._build()
         self.agent.listeners.append(self.feed.add)
         self.agent.configure(self.cfg.rois)
-        self.agent.say("boot", f"NVR Vision Agent 준비 완료 – ROI {len(self.cfg.rois)}개 로드 · 외부 전송 없이 PC 내부에서 동작")
+        self.agent.say("boot", f"FMVS Vision Agent 준비 완료 – ROI {len(self.cfg.rois)}개 로드 · 외부 전송 없이 PC 내부에서 동작")
         self._update_running_ui()
         self._refresh_kpis()
+        self._purge_old_files()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(200, self._poll_events)
         self.root.after(500, self._heartbeat)
@@ -86,9 +90,9 @@ class App:
         header.pack_propagate(False)
         brand = tk.Frame(header, bg=T["panel"])
         brand.pack(side="left", padx=18)
-        tk.Label(brand, text="◆ NVR VISION AGENT", bg=T["panel"], fg=T["accent"],
+        tk.Label(brand, text="◆ FMVS VISION AGENT", bg=T["panel"], fg=T["accent"],
                  font=("Segoe UI", 17, "bold")).pack(anchor="w", pady=(8, 0))
-        tk.Label(brand, text="자율 영상 품질 관제 에이전트 · 관찰 → 판단 → 실행 → 학습", bg=T["panel"], fg=T["muted"],
+        tk.Label(brand, text="자율 영상 품질 관제 에이전트", bg=T["panel"], fg=T["muted"],
                  font=(db.F, 9)).pack(anchor="w")
         right = tk.Frame(header, bg=T["panel"])
         right.pack(side="right", padx=18)
@@ -137,14 +141,14 @@ class App:
         self.wall.pack(fill="both", expand=True)
         hpaned.add(wall_box, weight=3)
         side = tk.Frame(hpaned, bg=T["bg"], width=430)
-        self.feed = db.FeedPanel(side)
-        self.feed.pack(fill="both", expand=True, pady=(0, 8))
+        self.roi_trend = db.RoiTrendPanel(side, on_select=self._select_roi)
+        self.roi_trend.pack(fill="both", expand=True, pady=(0, 8))
         self.trend = db.TrendChart(side)
         self.trend.pack(fill="x")
         hpaned.add(side, weight=2)
         vpaned.add(hpaned, weight=4)
 
-        # ---- 하단 탭: ROI 목록 / 시스템 로그 ----
+        # ---- 하단 탭: ROI 목록 / 에이전트 활동·시스템 로그 ----
         nb = ttk.Notebook(vpaned, style="Dark.TNotebook")
         tree_frame = tk.Frame(nb, bg=T["panel"])
         self.tree = ttk.Treeview(tree_frame, columns=[c[0] for c in COLUMNS], show="headings",
@@ -165,16 +169,9 @@ class App:
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.wall.select(set(self.tree.selection())))
         nb.add(tree_frame, text="  ROI 목록  ")
 
-        log_frame = tk.Frame(nb, bg=T["panel"])
-        self.log_text = tk.Text(log_frame, height=6, state="disabled", wrap="none", font=(db.F, 9),
-                                bg=T["panel"], fg=T["text"], relief="flat", borderwidth=0, highlightthickness=0)
-        lsb = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview, style="Dark.Vertical.TScrollbar")
-        self.log_text.configure(yscrollcommand=lsb.set)
-        self.log_text.pack(side="left", fill="both", expand=True, padx=(8, 0))
-        lsb.pack(side="right", fill="y")
-        for level, color in (("error", T["red"]), ("warning", T["amber"]), ("info", T["text"])):
-            self.log_text.tag_configure(level, foreground=color)
-        nb.add(log_frame, text="  시스템 로그  ")
+        self.feed = db.FeedPanel(nb)          # 에이전트 활동 + 시스템 로그 통합
+        nb.add(self.feed, text="  에이전트 활동 · 시스템 로그  ")
+        self.notebook = nb
         vpaned.add(nb, weight=1)
 
         self.status_var = tk.StringVar()
@@ -269,6 +266,8 @@ class App:
         self.alerts.sound_enabled = self.cfg.sound_enabled
         self._refresh_tree()
         self._sync_overlay()
+        self._sync_mini()
+        self._refresh_trends()
         if message:
             self.log("info", message)
 
@@ -323,10 +322,12 @@ class App:
         result = roi_dialog.edit_roi(self.root, roi, f"ROI 설정 – {roi.name}")
         if result is None:
             return
-        if (result.x, result.y, result.w, result.h) != (roi.x, roi.y, roi.w, roi.h):
-            self._delete_reference(roi.id)
+        note = ""
+        if (result.w, result.h) != (roi.w, roi.h):
+            n = worker.resize_samples(roi.id, result.w, result.h)   # 샘플은 지우지 않고 새 크기에 맞춤
+            note = f" · 크기 변경 → 샘플 {n}장 새 크기로 유지" if n else ""
         self.cfg.rois[self.cfg.rois.index(roi)] = result
-        self._commit(f"[{result.name}] 설정 변경")
+        self._commit(f"[{result.name}] 설정 변경{note}")
 
     def reposition_selected(self):
         roi = self._one_selected()
@@ -341,12 +342,25 @@ class App:
             return
         if not rects:
             return
-        roi.x, roi.y, roi.w, roi.h = rects[0]
+        nx, ny, nw, nh = rects[0]
+        note = ""
+        if (nw, nh) != (roi.w, roi.h):
+            keep = messagebox.askyesnocancel(
+                "ROI 크기", f"새로 그린 크기 {nw}×{nh}가 기존 {roi.w}×{roi.h}와 다릅니다.\n\n"
+                          f"[예] 기존 크기 {roi.w}×{roi.h}를 유지하고 위치만 이동 (권장 – 샘플 그대로 사용)\n"
+                          f"[아니오] 새 크기로 변경 (샘플/기준 이미지를 새 크기에 맞춰 유지)\n[취소] 변경 안 함",
+                parent=self.root)
+            if keep is None:
+                return
+            if keep:   # 그린 영역의 중심에 기존 크기로 배치
+                nx, ny, nw, nh = nx + nw // 2 - roi.w // 2, ny + nh // 2 - roi.h // 2, roi.w, roi.h
+            else:
+                n = worker.resize_samples(roi.id, nw, nh)
+                note = f" · 샘플 {n}장 새 크기로 유지" if n else ""
+        roi.x, roi.y, roi.w, roi.h = nx, ny, nw, nh
         if processes and processes[0] and not roi.expected_process:
             roi.expected_process = processes[0]
-        self._delete_reference(roi.id)
-        hint = " – 기준 이미지를 다시 저장하세요" if roi.detector in detectors.REFERENCE_KINDS else ""
-        self._commit(f"[{roi.name}] 위치 변경: {roi.x},{roi.y} {roi.w}×{roi.h}{hint}")
+        self._commit(f"[{roi.name}] 위치 변경: {roi.x},{roi.y} {roi.w}×{roi.h} (샘플/기준 이미지 유지){note}")
 
     def duplicate_selected(self):
         roi = self._one_selected()
@@ -496,9 +510,11 @@ class App:
         self.monitor.start()
         self.log("info", f"검출 시작 (ROI {sum(r.enabled for r in self.cfg.rois)}개, "
                          f"{self.cfg.interval_sec:g}초 주기)")
+        self.consecutive.clear()
         self._update_running_ui()
         if self.cfg.minimize_on_start:
             self.root.after(300, self.root.iconify)
+        self.root.after(400, self._sync_mini)
 
     def stop(self):
         if self.monitor is None:
@@ -508,6 +524,34 @@ class App:
         self.monitor = None
         self.states.clear()
         self._update_running_ui()
+        self.mini.hide()
+
+    def _open_dashboard(self):
+        self.root.deiconify()
+        self.root.state("normal")
+        self.root.lift()
+        self.root.focus_force()
+
+    def _sync_mini(self):
+        """검출 중이면 화면 하단에 ROI 트렌드 미니 모니터를 띄운다."""
+        try:
+            if self.monitor is not None and self.cfg.mini_monitor:
+                self.mini.show(self.agent.roi_trends([r for r in self.cfg.rois if r.enabled]),
+                               self.cfg.mini_position, [(r.x, r.y, r.w, r.h) for r in self.cfg.rois if r.enabled])
+            else:
+                self.mini.hide()
+        except tk.TclError:
+            log.exception("미니 모니터 오류")
+
+    def _refresh_trends(self):
+        trends = self.agent.roi_trends(self.cfg.rois)
+        self.roi_trend.draw(trends)
+        if self.monitor is not None and self.mini.visible():
+            alarms = sum(1 for s, _d in self.states.values() if s == "alarm")
+            ok = time.monotonic() - self._last_status < max(10.0, self.cfg.interval_sec * 5)
+            status = ("⚠ 응답 없음" if not ok else
+                      f"● 감시 중 · 경보 {alarms}건" if alarms else "● 실시간 감시 중 · 이상 없음")
+            self.mini.update([t for t in trends if t["enabled"]], status, ok and not alarms)
 
     def _update_running_ui(self):
         running = self.monitor is not None
@@ -557,6 +601,10 @@ class App:
                 self._refresh_kpis()
             if self._beat % 60 == 1:
                 self.trend.draw(self.agent.hourly_series(12))
+            if self._beat % 4 == 1:
+                self._refresh_trends()
+            if self._beat % 7200 == 0:             # 1시간마다 보관 기간 정리
+                self._purge_old_files()
         except tk.TclError:
             log.exception("대시보드 갱신 오류")
         self.root.after(500, self._heartbeat)
@@ -588,12 +636,12 @@ class App:
     def generate_report(self, auto: bool):
         """근무 리포트(HTML) 작성. 자동(교대 시각)이면 Teams로 요약 전송, 수동이면 바로 열기."""
         now = datetime.now()
-        title = f"NVR 근무 리포트 {now:%Y-%m-%d %H:%M}"
+        title = f"FMVS 근무 리포트 {now:%Y-%m-%d %H:%M}"
         try:
             paths.ensure_dirs()
             path = os.path.join(paths.REPORT_DIR, f"report_{now:%Y%m%d_%H%M}.html")
             with open(path, "w", encoding="utf-8") as f:
-                f.write(self.agent.report_html(title, self.cfg.rois))
+                f.write(self.agent.report_html(title, self.cfg.rois, frames=dict(self.latest_frames)))
         except OSError as e:
             self.log("error", f"리포트 저장 실패: {e}")
             return None
@@ -633,6 +681,8 @@ class App:
                     self._last_status = time.monotonic()
                     if self.monitor is not None:
                         self.agent.on_status(roi_id, state, detail)
+                    if state == "ok":
+                        self.consecutive[roi_id] = 0       # OK 판정이 나오면 연속 횟수 초기화
                     if (self.monitor is not None and self.cfg.find(roi_id) is not None
                             and self.states.get(roi_id) != (state, detail)):
                         self.states[roi_id] = (state, detail)
@@ -643,9 +693,16 @@ class App:
                     info = event[1]
                     tag = "재알림" if info["kind"] == "repeat" else "이상 감지"
                     self.log("error", f"🚨 [{info['roi_name']}] {tag} – {info['detail']}")
-                    if self.cfg.popup_enabled:
+                    count = self.consecutive.get(info["roi_id"], 0) + 1
+                    self.consecutive[info["roi_id"]] = count
+                    info["consecutive"] = count
+                    need = max(1, self.cfg.popup_consecutive)
+                    if self.cfg.popup_enabled and count >= need:
                         self.alerts.alert(info)
+                    elif self.cfg.popup_enabled:
+                        self.log("info", f"[{info['roi_name']}] 연속 NG {count}/{need}회 – {need}회부터 팝업")
                     self._run_actions(self.agent.on_alert(info))
+                    self._refresh_trends()
                 elif kind == "recover":
                     info = event[1]
                     self.log("info", f"✅ [{info['roi_name']}] 정상 복구 – {info['detail']}")
@@ -663,6 +720,7 @@ class App:
         except queue.Empty:
             pass
         for roi_id, rgb in frames.items():
+            self.latest_frames[roi_id] = rgb
             try:
                 self.wall.update_frame(roi_id, rgb)
             except Exception:
@@ -672,15 +730,18 @@ class App:
         self.root.after(200, self._poll_events)
 
     def log(self, level: str, message: str):
+        """시스템 로그 – 파일 로그 + 화면의 '에이전트 활동 · 시스템 로그' 통합 스트림."""
         getattr(log, level if level in ("info", "warning", "error") else "info")(message)
-        line = f"[{datetime.now():%H:%M:%S}] {message}\n"
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", line, level)
-        excess = int(self.log_text.index("end-1c").split(".")[0]) - _MAX_LOG_LINES
-        if excess > 0:
-            self.log_text.delete("1.0", f"{excess + 1}.0")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
+        kind = {"error": "error", "warning": "warn"}.get(level, "sys")
+        self.feed.add(agentmod.FeedItem(time.time(), kind, message))
+
+    def _purge_old_files(self):
+        try:
+            removed = housekeeping.purge(self.cfg.retention_days)
+            if removed:
+                self.log("info", f"보관 기간({self.cfg.retention_days}일) 지난 로그·스냅샷·리포트 {removed}개 정리")
+        except Exception:
+            log.exception("보관 기간 정리 실패")
 
     def _on_tk_error(self, exc, value, tb):
         log.error("UI 오류", exc_info=(exc, value, tb))
@@ -699,6 +760,7 @@ class App:
             log.exception("종료 시 설정 저장 실패")
         self.alerts.close_all()
         self.overlay.destroy()
+        self.mini.destroy()
         self.root.destroy()
 
     def run(self):

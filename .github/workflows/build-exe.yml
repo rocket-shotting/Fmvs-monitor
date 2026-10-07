@@ -31,7 +31,7 @@ jobs:
         run: python tests/smoke_gui.py
 
       - name: Build EXE
-        run: python -m PyInstaller --noconfirm --clean "NVR_흑변_검출기.spec"
+        run: python -m PyInstaller --noconfirm --clean "FMVS_Vision_Agent.spec"
 
       - name: Upload dashboard preview
         if: always()
@@ -44,6 +44,6 @@ jobs:
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: NVR_검출기_EXE
+          name: FMVS_Vision_Agent_EXE
           path: dist/*.exe
           if-no-files-found: error

@@ -56,10 +56,10 @@ def build_payload(kind: str, *, roi_name: str, detector_label: str, detail: str,
     상위 필드(assignee_email 등)는 사용자 지정 흐름에서 담당자별 개인 채팅 전송에 쓰고,
     attachments(적응형 카드)는 Teams 기본 템플릿 'Webhook 경고를 채팅/채널에 보내기'가 그대로 게시한다."""
     titles = {
-        "alert": ("🚨 NVR 화면 이상 감지", "Attention"),
-        "repeat": ("🚨 NVR 화면 이상 지속 (재알림)", "Attention"),
-        "recover": ("✅ NVR 화면 정상 복구", "Good"),
-        "test": ("🔔 NVR 검출기 테스트 알림", "Accent"),
+        "alert": ("🚨 FMVS 화면 이상 감지", "Attention"),
+        "repeat": ("🚨 FMVS 화면 이상 지속 (재알림)", "Attention"),
+        "recover": ("✅ FMVS 화면 정상 복구", "Good"),
+        "test": ("🔔 FMVS 검출기 테스트 알림", "Accent"),
     }
     title, color = titles.get(kind, titles["alert"])
     who = assignee or "미지정"
@@ -99,7 +99,7 @@ def build_payload(kind: str, *, roi_name: str, detector_label: str, detail: str,
 
 def build_agent_payload(title: str, message: str, *, pc_label: str, when: str) -> dict:
     """에이전트 판단(동시다발 이상·연속 불량·반복 장애)과 근무 리포트 요약용 메시지."""
-    full_title = f"🧠 NVR 비전 에이전트 – {title}"
+    full_title = f"🧠 FMVS 비전 에이전트 – {title}"
     facts = [("PC", pc_label), ("시각", when)]
     return {
         "event": "agent",

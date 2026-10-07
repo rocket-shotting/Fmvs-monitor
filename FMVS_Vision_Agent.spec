@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='NVR_흑변_검출기',
+    name='FMVS_Vision_Agent',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

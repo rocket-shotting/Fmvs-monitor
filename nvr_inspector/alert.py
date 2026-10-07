@@ -156,9 +156,12 @@ class AlertPopup:
                     btn.pack(side="left", padx=(10 if i == 0 else 2, 2))
         self.when_label.configure(text=info["time"])
         older = list(self.history)[1:]
+        if not recovered:
+            self.total = info.get("total_ng", self.count)
         if self.count:
-            self.history_label.configure(text=f"이 ROI 탐지 {self.count}회"
-                                              + (" · 이전: " + ", ".join(t[-8:] for t in older) if older else ""))
+            head = f"이 ROI 누적 탐지 {getattr(self, 'total', self.count)}회"
+            self.history_label.configure(text=head + (" · 이전 탐지: " + ", ".join(t[-8:] for t in older)
+                                                      if older else ""))
         self.body.configure(text="\n".join(lines))
         self.win.deiconify()
         self.win.lift()

@@ -283,7 +283,7 @@ class FeedPanel(tk.Frame):
                  font=(F, 8)).pack(side="right")
         body = tk.Frame(self, bg=T["panel"])
         body.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 10))
-        self.text = tk.Text(body, bg=T["panel"], fg=T["text"], font=(F, 9), wrap="word", relief="flat",
+        self.text = tk.Text(body, height=6, bg=T["panel"], fg=T["text"], font=(F, 9), wrap="word", relief="flat",
                             borderwidth=0, highlightthickness=0, state="disabled", spacing1=2, spacing3=3)
         vsb = ttk.Scrollbar(body, orient="vertical", command=self.text.yview, style="Dark.Vertical.TScrollbar")
         self.text.configure(yscrollcommand=vsb.set)
@@ -377,7 +377,9 @@ class RoiTrendPanel(tk.Canvas):
             self.create_text(w // 2, h // 2, text="ROI를 추가하면 여기서 ROI별 NG 추이를 볼 수 있습니다",
                              fill=T["muted"], font=(F, 9))
             return
-        max_rows = max(1, (h - 56) // self.ROW_H)
+        max_rows = max(1, (h - 48 - 18) // self.ROW_H)
+        if len(self.trends) <= (h - 48 - 4) // self.ROW_H:
+            max_rows = len(self.trends)             # 다 들어가면 안내 문구 자리 없이 모두 표시
         n = draw_roi_rows(self, self.trends, 8, 48, w - 16, self.ROW_H, max_rows)
         if len(self.trends) > n:
             self.create_text(w // 2, h - 8, text=f"외 {len(self.trends) - n}개 ROI (창을 키우면 더 보입니다)",
@@ -395,6 +397,12 @@ class MiniMonitor:
     WIDTH = 420
     ROW_H = 24
     MAX_ROWS = 14
+
+    def rect(self):
+        """화면 위 미니 모니터 영역 (팝업 배치 시 피하기 위함). 안 보이면 None."""
+        if not self.visible():
+            return None
+        return (self.win.winfo_x(), self.win.winfo_y(), self.win.winfo_width(), self.win.winfo_height())
 
     def __init__(self, root: tk.Tk, on_open: Callable, on_stop: Callable):
         self.root = root

@@ -314,8 +314,15 @@ def capture_previews(app, out):
         app.trend.draw(app.agent.hourly_series(12))
         root.update()
         _time.sleep(0.4)
+        app._place_sash()
+        for _ in range(4):
+            root.update()
+            _time.sleep(0.1)
         x, y = root.winfo_rootx(), root.winfo_rooty()
         rw, rh = root.winfo_width(), root.winfo_height()
+        top_h = app.wall.winfo_height()
+        print(f"  카메라 월 높이 {top_h}px / 창 {rh}px, 카드 열 수 {app.wall._cols}")
+        assert top_h >= rh * 0.4, f"{w}x{h}: 카메라 월이 너무 작음 ({top_h}px)"
         with Grabber() as g:
             shot = g.grab(x, y, rw, rh)
         Image.fromarray(shot).save(os.path.join(out, f"dashboard_{w}x{h}.png"))
@@ -335,6 +342,11 @@ def capture_previews(app, out):
     for _ in range(6):
         root.update()
         _time.sleep(0.15)
+    popup_rect = app.alerts.popups[roi.id].rect()
+    mini_rect = app.mini.rect()
+    print(f"팝업 {popup_rect} · 미니 모니터 {mini_rect}")
+    if mini_rect:
+        assert alert._overlap(popup_rect, mini_rect) == 0, "탐지 팝업이 미니 모니터를 가림"
     with Grabber() as g:
         img, _l, _t = g.grab_virtual_screen()
     img.save(os.path.join(out, "screen_running.png"))

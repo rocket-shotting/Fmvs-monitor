@@ -39,7 +39,7 @@ STATE_TEXT = {
     "moving": "움직임(대기)",
 }
 STATE_COLOR = dict(db.STATE_COLORS, idle=db.T["muted"])
-COLUMNS = (("enabled", "사용", 50), ("name", "이름", 150), ("detector", "검출 유형", 190),
+COLUMNS = (("enabled", "사용", 50), ("name", "이름", 150), ("detector", "검출 유형 · 샘플", 260),
            ("rect", "위치 (X,Y 폭×높이)", 170), ("assignee", "담당자", 120),
            ("state", "상태", 130), ("detail", "측정값 / 상세", 330))
 
@@ -58,7 +58,7 @@ class App:
         self.teams = notifier.TeamsNotifier(self._report_threadsafe)
         self.monitor: Optional[worker.Monitor] = None
         self.alerts = alert.AlertManager(self.root, on_register=self.register_sample,
-                                         avoid_rects=lambda: [(r.x, r.y, r.w, r.h) for r in self.cfg.rois if r.enabled])
+                                         avoid_rects=self._popup_avoid_rects)
         self.states: Dict[str, tuple] = {}
         self.overlay = overlay.ScreenOverlay(self.root)
         self._last_status = 0.0      # 검출 스레드가 마지막으로 상태를 보낸 시각 (응답 없음 감지)
@@ -173,10 +173,23 @@ class App:
         nb.add(self.feed, text="  에이전트 활동 · 시스템 로그  ")
         self.notebook = nb
         vpaned.add(nb, weight=1)
+        self._vpaned = vpaned
+        self.root.after(150, self._place_sash)
 
         self.status_var = tk.StringVar()
         tk.Label(self.root, textvariable=self.status_var, anchor="w", bg=T["panel"], fg=T["muted"],
                  font=(db.F, 8), padx=14, pady=4).pack(fill="x", side="bottom")
+
+    def _place_sash(self, tries: int = 0):
+        """처음 표시될 때 위:아래 = 약 68:32 (하단 탭이 위 영역을 밀어내지 않도록)."""
+        h = self._vpaned.winfo_height()
+        if h < 200 and tries < 20:
+            self.root.after(100, lambda: self._place_sash(tries + 1))
+            return
+        try:
+            self._vpaned.sashpos(0, max(320, int(h * 0.68)))
+        except tk.TclError:
+            pass
 
     def _select_roi(self, roi_id: str):
         if self.tree.exists(roi_id):
@@ -211,13 +224,13 @@ class App:
             state, detail = ("off", "") if not roi.enabled else ("idle", "")
         else:
             state, detail = self.states.get(roi.id, ("idle", ""))
-        kind = roi.detector_label()
+        kind = roi.detector_label().split(" (")[0]
         if roi.detector == "match":
             n = {c: len(paths.reference_paths(roi.id, c)) for c in detectors.SAMPLE_CLASSES}
-            kind += f" · OK {n['ok']} / NG {n['ng']} / 무시 {n['skip']}"
+            kind += f" · OK{n['ok']}/NG{n['ng']}/무시{n['skip']}"
         elif roi.detector in detectors.REFERENCE_KINDS:
-            n = len(paths.reference_paths(roi.id))
-            kind += f" · 기준 {n}장" if n else " · 기준 없음"
+            n = {c: len(paths.reference_paths(roi.id, c)) for c in detectors.SAMPLE_CLASSES}
+            kind += f" · OK{n['ok']}/NG{n['ng']}/무시{n['skip']}" if n["ok"] else " · 기준 없음"
         return ("✔" if roi.enabled else "–", roi.name, kind,
                 f"{roi.x},{roi.y}  {roi.w}×{roi.h}", roi.assignee or "-",
                 STATE_TEXT.get(state, state), detail), state
@@ -526,6 +539,14 @@ class App:
         self._update_running_ui()
         self.mini.hide()
 
+    def _popup_avoid_rects(self):
+        """탐지 팝업이 가리면 안 되는 영역: 감시 중인 ROI + 미니 모니터."""
+        rects = [(r.x, r.y, r.w, r.h) for r in self.cfg.rois if r.enabled]
+        mini = self.mini.rect() if hasattr(self, "mini") else None
+        if mini:
+            rects.append(mini)
+        return rects
+
     def _open_dashboard(self):
         self.root.deiconify()
         self.root.state("normal")
@@ -696,12 +717,14 @@ class App:
                     count = self.consecutive.get(info["roi_id"], 0) + 1
                     self.consecutive[info["roi_id"]] = count
                     info["consecutive"] = count
+                    actions = self.agent.on_alert(info)
+                    info["total_ng"] = self.agent.stats[info["roi_id"]].ng
                     need = max(1, self.cfg.popup_consecutive)
                     if self.cfg.popup_enabled and count >= need:
                         self.alerts.alert(info)
                     elif self.cfg.popup_enabled:
                         self.log("info", f"[{info['roi_name']}] 연속 NG {count}/{need}회 – {need}회부터 팝업")
-                    self._run_actions(self.agent.on_alert(info))
+                    self._run_actions(actions)
                     self._refresh_trends()
                 elif kind == "recover":
                     info = event[1]

@@ -194,7 +194,7 @@ class CameraWall(tk.Frame):
         vsb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         self.inner = tk.Frame(self.canvas, bg=T["bg"])
-        self._win = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self._win = self.canvas.create_window(0, 0, window=self.inner, anchor="n")
         self.inner.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._on_resize)
         self.canvas.bind("<Enter>", lambda _e: self.canvas.bind_all("<MouseWheel>", self._on_wheel))
@@ -209,7 +209,7 @@ class CameraWall(tk.Frame):
         self.canvas.yview_scroll(int(-e.delta / 120), "units")
 
     def _on_resize(self, e):
-        self.canvas.itemconfigure(self._win, width=e.width)
+        self.canvas.coords(self._win, e.width // 2, 0)       # 카드 묶음을 가운데 정렬
         cols = max(1, e.width // (CameraCard.W + 16 + self.GAP * 2))
         if cols != self._cols:
             self._cols = cols

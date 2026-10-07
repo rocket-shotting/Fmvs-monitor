@@ -172,6 +172,14 @@ def make_capture_excluded(widget_id: int) -> bool:
     return bool(_user32.SetWindowDisplayAffinity(hwnd, _WDA_EXCLUDEFROMCAPTURE))
 
 
+def set_capture_visible(widget_id: int, visible: bool) -> bool:
+    """화면 캡처 제외를 켜고 끈다 (미리보기 캡처용)."""
+    if not IS_WINDOWS:
+        return False
+    hwnd = _user32.GetAncestor(widget_id, _GA_ROOT) or widget_id
+    return bool(_user32.SetWindowDisplayAffinity(hwnd, 0 if visible else _WDA_EXCLUDEFROMCAPTURE))
+
+
 def overlay_style_ok(widget_id: int) -> bool:
     """오버레이가 클릭 통과 상태인지 (테스트/진단용)."""
     if not IS_WINDOWS:

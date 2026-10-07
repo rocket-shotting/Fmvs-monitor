@@ -282,22 +282,66 @@ def demo_dashboard(app):
     out = os.path.join(ROOT, "ci_artifacts")
     os.makedirs(out, exist_ok=True)
     try:
-        from capture import Grabber
-        root.lift()
-        root.attributes("-topmost", True)
-        root.update()
-        _time.sleep(0.5)
-        x, y, w, h = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
-        with Grabber() as g:
-            shot = g.grab(x, y, w, h)
-        from PIL import Image
-        Image.fromarray(shot).save(os.path.join(out, "dashboard_preview.png"))
-        print(f"대시보드 캡처 저장: {w}x{h}")
+        capture_previews(app, out)
     except Exception as e:      # 캡처는 참고용 – 실패해도 테스트는 통과
+        import traceback
+        traceback.print_exc()
         print(f"대시보드 캡처 실패: {e}")
     import shutil
     shutil.copy(report, os.path.join(out, "report_preview.html"))
     app.monitor = None
+
+
+def capture_previews(app, out):
+    """여러 모니터 크기에서 대시보드를 캡처하고, 미니 모니터·팝업이 뜬 전체 화면도 캡처한다."""
+    import time as _time
+    import winutil
+    from capture import Grabber
+    from PIL import Image
+    root = app.root
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    print(f"CI 화면 해상도: {sw}x{sh}")
+    root.attributes("-topmost", True)
+    for w, h in ((1920, 1040), (1600, 900), (1366, 728)):
+        if w > sw or h > sh:
+            continue
+        root.state("normal")
+        root.geometry(f"{w}x{h}+0+0")
+        for _ in range(6):
+            root.update()
+            _time.sleep(0.15)
+        app._refresh_trends()
+        app.trend.draw(app.agent.hourly_series(12))
+        root.update()
+        _time.sleep(0.4)
+        x, y = root.winfo_rootx(), root.winfo_rooty()
+        rw, rh = root.winfo_width(), root.winfo_height()
+        with Grabber() as g:
+            shot = g.grab(x, y, rw, rh)
+        Image.fromarray(shot).save(os.path.join(out, f"dashboard_{w}x{h}.png"))
+        print(f"대시보드 캡처: 요청 {w}x{h} → 실제 창 {rw}x{rh}")
+    # 전체 화면: 메인 창 최소화 + 미니 모니터 + 탐지 팝업
+    root.attributes("-topmost", False)
+    root.iconify()
+    app._sync_mini()
+    root.update()
+    if app.mini.win is not None:
+        winutil.set_capture_visible(app.mini.win.winfo_id(), True)   # 미리보기용으로만 캡처 허용
+    roi = app.cfg.rois[3]
+    app.alerts.alert({"kind": "alert", "roi_id": roi.id, "roi_name": roi.name, "detector": roi.detector_label(),
+                      "detail": "NG 샘플과 가장 비슷 (OK 0.71 · NG 0.18)", "elapsed": None, "assignee": "홍길동",
+                      "assignee_email": "", "time": "2026-10-07 10:41:10", "snapshot": None,
+                      "raw_snapshot": None, "roi_detector": "match", "consecutive": 2})
+    for _ in range(6):
+        root.update()
+        _time.sleep(0.15)
+    with Grabber() as g:
+        img, _l, _t = g.grab_virtual_screen()
+    img.save(os.path.join(out, "screen_running.png"))
+    print("전체 화면(미니 모니터·팝업) 캡처 완료")
+    app.alerts.close_all()
+    app.mini.hide()
+    root.deiconify()
 
 
 if __name__ == "__main__":

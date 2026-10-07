@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     env:
       PYTHONIOENCODING: utf-8
     steps:
@@ -27,6 +29,11 @@ jobs:
         working-directory: nvr_inspector
         run: python -c "import winutil, capture, gui, roi_dialog, roi_editor, settings_dialog, alert; print('imports ok')"
 
+      - name: Set screen resolution (실제 모니터 크기로 미리보기)
+        continue-on-error: true
+        shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
       - name: GUI smoke test (모든 창 생성/동작)
         run: python tests/smoke_gui.py
 
@@ -40,6 +47,20 @@ jobs:
           name: dashboard_preview
           path: ci_artifacts/
           if-no-files-found: ignore
+
+      - name: Publish preview images to branch (리뷰용)
+        if: always()
+        shell: bash
+        run: |
+          [ -d ci_artifacts ] || exit 0
+          cd ci_artifacts
+          git init -q -b preview
+          git config user.name "ci-preview"
+          git config user.email "ci-preview@users.noreply.github.com"
+          git add -A
+          git commit -qm "dashboard preview for ${GITHUB_SHA}"
+          git push -f -q "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" \
+            preview:refs/heads/claude/nvr-blackout-detector-exe-zhf83d-preview
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4

@@ -199,11 +199,90 @@ def main():
     assert app.tree.set(roi.id, "state") == gui.STATE_TEXT["moving"]
     app.monitor = None
 
+    # ---- ROI 가림 판정: 실제로 덮은 창이 있을 때만 건너뜀 ----
+    occlusion_check(app)
+
     # ---- 대시보드 + 에이전트: 데모 데이터로 화면을 채우고 캡처 (CI 아티팩트로 확인) ----
     demo_dashboard(app)
 
     root.destroy()
     print("GUI smoke test OK")
+
+
+def occlusion_check(app):
+    """다른 프로세스(pythonw.exe) 창으로 ROI를 덮었을 때만 건너뛰고, 옆에 붙어 있을 때는 판정하는지 확인."""
+    import subprocess
+    import time
+
+    import occlusion
+    import winutil
+    root = app.root
+    own = os.path.basename(sys.executable)
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if not os.path.exists(pythonw):
+        print("pythonw.exe 없음 – 가림 판정 확인 생략")
+        return
+    # 대상 프로그램 역할: 이 프로세스의 창으로 ROI 주변을 채움
+    target = tk_toplevel(root, 100, 100, 700, 500)
+    roi = (300, 250, 200, 150)                      # x 300~500, y 250~400
+
+    def visibility():
+        root.update()
+        return occlusion.roi_visibility(roi, winutil.visible_windows(), own)
+
+    def spawn(x, y, w, h, decorated):
+        code = ("import tkinter as tk;r=tk.Tk();r.overrideredirect(%d);r.geometry('%dx%d+%d+%d');"
+                "r.configure(bg='#ff00ff');r.attributes('-topmost',1);r.after(20000,r.destroy);r.mainloop()"
+                % (0 if decorated else 1, w, h, x, y))
+        proc = subprocess.Popen([pythonw, "-c", code])
+        for _ in range(60):
+            root.update()
+            wins = [win for win in winutil.visible_windows() if win.process.lower() == "pythonw.exe"]
+            if wins:
+                time.sleep(0.3)
+                return proc, [win for win in winutil.visible_windows() if win.process.lower() == "pythonw.exe"]
+            time.sleep(0.2)
+        proc.kill()
+        raise AssertionError("pythonw 창이 뜨지 않음")
+
+    try:
+        res = visibility()
+        print(f"가림 없음: {res}")
+        assert res.ok, f"아무것도 안 가렸는데 건너뜀: {res.detail}"
+
+        proc, wins = spawn(400, 300, 300, 200, decorated=False)     # ROI 오른쪽 아래 절반을 덮음
+        res = visibility()
+        print(f"덮은 창 {wins[0].rect}: {res}")
+        assert not res.ok and "pythonw.exe" in res.detail, res
+        proc.kill()
+        proc.wait()
+
+        # 테두리 있는 일반 창을 ROI 오른쪽에 바짝 붙임 (보이지 않는 크기 조절 테두리가 ROI에 걸치는 상황)
+        proc, wins = spawn(500 - 6, 200, 300, 250, decorated=True)
+        frame = wins[0].rect
+        res = visibility()
+        print(f"옆에 붙은 창 (보이는 영역 {frame}): {res}")
+        if frame[0] >= 500 - 2:
+            assert res.ok, f"ROI를 가리지 않는 옆 창 때문에 건너뜀: {res.detail}"
+        else:
+            assert not res.ok, res
+        proc.kill()
+        proc.wait()
+        print("가림 판정 확인 완료")
+    finally:
+        target.destroy()
+        root.update()
+
+
+def tk_toplevel(root, x, y, w, h):
+    import tkinter as tk
+    win = tk.Toplevel(root)
+    win.overrideredirect(True)
+    win.geometry(f"{w}x{h}+{x}+{y}")
+    win.configure(bg="#203040")
+    win.attributes("-topmost", True)
+    win.update()
+    return win
 
 
 def _tab(h, w, x, fold=0.0, bend=0, seed=0, bg=40, fg=190):

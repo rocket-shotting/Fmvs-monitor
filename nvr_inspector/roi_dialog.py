@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 
 import detectors
 import notifier
+import occlusion
 import winutil
 import worker
 from capture import Grabber
@@ -261,7 +262,7 @@ class RoiDialog:
         except ValueError as e:
             messagebox.showerror("입력 오류", str(e), parent=self.top)
             return
-        frames, proc = [], None
+        frames, windows = [], None
         try:
             with hidden_windows(self.top, self.master):
                 with Grabber() as g:
@@ -269,8 +270,8 @@ class RoiDialog:
                     if roi.detector == "frozen" or roi.still_only:
                         time.sleep(1.0 if roi.detector == "frozen" else 0.5)
                         frames.append(g.grab(roi.x, roi.y, roi.w, roi.h))
-                cx, cy = roi.center()
-                proc = winutil.process_name_at(cx, cy)
+                if roi.expected_process and winutil.IS_WINDOWS:
+                    windows = winutil.visible_windows()
         except Exception as e:
             self._regrab()
             messagebox.showerror("캡처 실패", str(e), parent=self.top)
@@ -290,10 +291,11 @@ class RoiDialog:
             lines.append(f"0.5초 간 변화량 {motion:.1f} → {'움직임 (판정 안 함)' if moving else '정지 (판정함)'}"
                          f" · 기준 {roi.still_diff:g}")
         if roi.expected_process and winutil.IS_WINDOWS:
-            if proc and proc.lower() == roi.expected_process.lower():
-                lines.append(f"대상 프로그램 확인: {proc} ✔")
+            vis = occlusion.roi_visibility((roi.x, roi.y, roi.w, roi.h), windows or [], roi.expected_process)
+            if vis.ok:
+                lines.append(f"대상 프로그램 확인: {roi.expected_process} ✔ (ROI를 가린 창 없음)")
             else:
-                lines.append(f"⚠ ROI 위치 프로그램: {proc or '확인 불가'} (지정: {roi.expected_process})")
+                lines.append(f"⚠ 검출 시 건너뜀: {vis.detail}")
         self.measure_label.configure(text="\n".join(lines), foreground="#000000")
 
     def _show_preview(self, rgb):

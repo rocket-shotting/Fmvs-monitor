@@ -15,6 +15,7 @@ import agent  # noqa: E402
 import config  # noqa: E402
 import detectors  # noqa: E402
 import notifier  # noqa: E402
+import occlusion  # noqa: E402
 import worker  # noqa: E402
 
 
@@ -616,6 +617,79 @@ class WorkerFlowTests(unittest.TestCase):
         cfg.rois.append(config.ROI(enabled=False))
         events, _ = self.run_ticks(cfg, [], [0.0])
         self.assertEqual(events[0][2], "off")
+
+
+def occlusion_window(process, rect, own=False):
+    return mock.Mock(process=process, rect=rect, own=own)
+
+
+class OcclusionTests(unittest.TestCase):
+    """ROI를 실제로 덮은 창이 있을 때만 건너뛴다."""
+    ROI = (200, 200, 100, 80)                       # x 200~300, y 200~280
+
+    @staticmethod
+    def win(process, rect, own=False):
+        return occlusion_window(process, rect, own)
+
+    def check(self, *windows):
+        return occlusion.roi_visibility(self.ROI, list(windows), "NVR.exe")
+
+    def test_visible_when_dashboard_does_not_overlap(self):
+        dash = self.win("FMVS_Vision_Agent.exe", (300, 0, 1200, 900), own=True)    # ROI 오른쪽에 딱 붙음
+        res = self.check(dash, self.win("nvr.EXE", (0, 0, 1920, 1080)))
+        self.assertTrue(res.ok, res.detail)
+
+    def test_edge_rounding_is_not_cover(self):
+        near = self.win("chrome.exe", (298, 0, 900, 900))                           # 2px 겹침 = 테두리 오차
+        self.assertTrue(self.check(near, self.win("NVR.exe", (0, 0, 1920, 1080))).ok)
+
+    def test_partial_cover_by_dashboard_skips(self):
+        dash = self.win("FMVS_Vision_Agent.exe", (250, 0, 1200, 900), own=True)
+        res = self.check(dash, self.win("NVR.exe", (0, 0, 1920, 1080)))
+        self.assertFalse(res.ok)
+        self.assertIn(occlusion.OWN_LABEL, res.detail)
+        self.assertAlmostEqual(res.covered_pct, 50, delta=4)
+
+    def test_window_below_target_is_ignored(self):
+        res = self.check(self.win("NVR.exe", (0, 0, 1920, 1080)), self.win("explorer.exe", (0, 0, 1920, 1080)))
+        self.assertTrue(res.ok)
+
+    def test_target_child_windows_count_as_target(self):
+        res = self.check(self.win("NVR.exe", (210, 210, 260, 260)), self.win("NVR.exe", (0, 0, 1920, 1080)))
+        self.assertTrue(res.ok)
+
+    def test_target_missing(self):
+        res = self.check(self.win("notepad.exe", (0, 0, 1920, 1080)))
+        self.assertFalse(res.ok)
+        self.assertIn("notepad.exe", res.detail)
+
+    def test_roi_outside_target_window(self):
+        res = self.check(self.win("NVR.exe", (0, 0, 250, 1080)))
+        self.assertFalse(res.ok)
+        self.assertIn("창 밖", res.detail)
+
+    def test_large_roi_uses_coarse_grid(self):
+        roi = (0, 0, 3000, 2000)
+        wins = [self.win("a.exe", (0, 0, 1500, 2000)), self.win("NVR.exe", (0, 0, 3000, 2000))]
+        res = occlusion.roi_visibility(roi, wins, "nvr.exe")
+        self.assertFalse(res.ok)
+        self.assertAlmostEqual(res.covered_pct, 50, delta=1)
+
+    def test_worker_skips_only_when_covered(self):
+        cfg = config.AppConfig()
+        roi = config.ROI(name="A", x=200, y=200, w=100, h=80, detector="black", expected_process="NVR.exe")
+        cfg.rois = [roi]
+        events = queue.Queue()
+        mon = worker.Monitor(cfg, events, mock.Mock())
+        windows = [self.win("FMVS.exe", (400, 0, 900, 900), own=True), self.win("NVR.exe", (0, 0, 1920, 1080))]
+        with mock.patch.object(worker.winutil, "IS_WINDOWS", True), \
+                mock.patch.object(worker.winutil, "visible_windows", return_value=windows):
+            mon._tick(cfg, FakeGrabber([solid((200, 200, 200), 80, 100)]))
+            windows.insert(0, self.win("FMVS.exe", (150, 150, 260, 260), own=True))
+            mon._tick(cfg, FakeGrabber([solid((200, 200, 200), 80, 100)]))
+        states = [e[2] for e in list(events.queue) if e[0] == "status"]
+        self.assertNotEqual(states[0], "skip")
+        self.assertEqual(states[-1], "skip")
 
 
 class NotifierTests(unittest.TestCase):

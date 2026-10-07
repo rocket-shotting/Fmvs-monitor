@@ -20,6 +20,7 @@ import numpy as np
 
 import detectors
 import notifier
+import occlusion
 import paths
 import winutil
 from capture import Grabber
@@ -115,6 +116,7 @@ class Monitor(threading.Thread):
         self._runtime: Dict[str, RoiRuntime] = {}
         self._refs: Dict[str, tuple] = {}   # roi_id -> ((파일, 수정시각)…, 배열 목록)
         self._clock = time.time              # 테스트에서 교체 가능
+        self._windows = None                 # 이번 주기 화면 창 목록 (가림 판정용)
         self._union = None                   # (x0, y0, 전체 캡처) – 한 번에 캡처한 화면
         self.send_frames = False             # 대시보드 썸네일 전송 여부
 
@@ -171,6 +173,7 @@ class Monitor(threading.Thread):
 
     def _tick(self, cfg: AppConfig, grabber: Grabber) -> None:
         alive = set()
+        self._windows = None
         self._prefetch(cfg, grabber)
         for roi in cfg.rois:
             if self._stop_event.is_set():
@@ -214,15 +217,32 @@ class Monitor(threading.Thread):
         self._refs[roi.id] = (key, data)
         return data
 
-    def _check(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, grabber: Grabber) -> None:
-        # 1) ROI 위치에 지정한 프로그램(NVR)이 보이는지 확인. 다른 창이 덮고 있으면 판정하지 않는다.
-        if roi.expected_process and winutil.IS_WINDOWS:
+    def _visibility(self, roi: ROI) -> occlusion.Visibility:
+        if self._windows is None:            # 창 목록은 한 주기에 한 번만 조회
+            try:
+                self._windows = "locked" if winutil.session_locked() else winutil.visible_windows()
+            except Exception as e:
+                log.warning("창 목록 조회 실패, 중심점 확인으로 대체: %s", e)
+                self._windows = "fallback"
+        if self._windows == "locked":
+            return occlusion.Visibility(False, "화면 잠금 상태 – 판정 안 함")
+        if self._windows == "fallback":
             cx, cy = roi.center()
             proc = winutil.process_name_at(cx, cy)
-            if proc is None or proc.lower() != roi.expected_process.lower():
+            if proc and proc.lower() == roi.expected_process.lower():
+                return occlusion.Visibility(True, "")
+            return occlusion.Visibility(False, f"다른 화면: {proc or '확인 불가(화면 잠금 등)'}")
+        return occlusion.roi_visibility((roi.x, roi.y, roi.w, roi.h), self._windows, roi.expected_process)
+
+    def _check(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, grabber: Grabber) -> None:
+        # 1) ROI 위치에 지정한 프로그램(NVR)이 보이는지 확인. 다른 창이 덮고 있으면 판정하지 않는다.
+        #    ROI 영역을 실제로 덮는 창이 있을 때만 건너뛴다 (대시보드가 떠 있어도 ROI와 겹치지 않으면 판정).
+        if roi.expected_process and winutil.IS_WINDOWS:
+            vis = self._visibility(roi)
+            if not vis.ok:
                 rt.abnormal_since = None
                 rt.det_state.clear()
-                self._emit("status", roi.id, "skip", f"다른 화면: {proc or '확인 불가(화면 잠금 등)'}")
+                self._emit("status", roi.id, "skip", vis.detail)
                 return
 
         # 2) 캡처 + 판정

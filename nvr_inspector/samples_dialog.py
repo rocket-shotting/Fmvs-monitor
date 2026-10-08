@@ -16,6 +16,7 @@ import paths
 import worker
 from capture import Grabber
 from config import ROI
+from i18n import tr
 from ui_util import hidden_windows, modal
 
 _THUMB = (150, 100)
@@ -27,23 +28,23 @@ class SamplesDialog:
         self.master = master
         self.roi = roi
         self.is_match = roi.detector == "match"
-        self.classes = {"ok": "OK (정상품 – 기준)", "ng": "NG (불량품)",
-                        "skip": "무시 (셀 없음·이동 중·가려짐 – 판정하지 않을 화면)"}
+        self.classes = {"ok": tr("OK (정상품 – 기준)"), "ng": tr("NG (불량품)"),
+                        "skip": tr("무시 (셀 없음·이동 중·가려짐 – 판정하지 않을 화면)")}
         self._photos: List[ImageTk.PhotoImage] = []
         self.sections: Dict[str, dict] = {}
         self._drag: Optional[dict] = None
 
         top = self.top = tk.Toplevel(master)
-        top.title(f"샘플 이미지 – {roi.name}  (ROI {roi.w}×{roi.h})")
+        top.title(tr("샘플 이미지 – {name}  (ROI {w}×{h})", name=roi.name, w=roi.w, h=roi.h))
         top.geometry("860x700")
         top.minsize(600, 300)
         body = ttk.Frame(top, padding=10)
         body.pack(fill="both", expand=True)
 
-        hint = ("현재 화면 또는 파일(과거 NG 사진 등)에서 이미지를 등록합니다. 파일은 ROI 크기에 맞춰 저장됩니다.\n"
-                "· OK: 정상 제품 (위치·모양 편차가 있으면 여러 장)   · NG: 불량 제품 (접힘·찍힘·휨 등 유형별로)\n"
-                "· 무시: 셀이 없을 때·이동 중·가려진 화면 – 이것과 비슷하면 판정하지 않습니다 (빈 화면 오탐 방지)\n"
-                "· 잘못 등록했으면 이미지를 다른 칸으로 끌어 놓거나, 우클릭 → 이동")
+        hint = tr("현재 화면 또는 파일(과거 NG 사진 등)에서 이미지를 등록합니다. 파일은 ROI 크기에 맞춰 저장됩니다.\n"
+                  "· OK: 정상 제품 (위치·모양 편차가 있으면 여러 장)   · NG: 불량 제품 (접힘·찍힘·휨 등 유형별로)\n"
+                  "· 무시: 셀이 없을 때·이동 중·가려진 화면 – 이것과 비슷하면 판정하지 않습니다 (빈 화면 오탐 방지)\n"
+                  "· 잘못 등록했으면 이미지를 다른 칸으로 끌어 놓거나, 우클릭 → 이동")
         ttk.Label(body, text=hint, foreground="#555555", justify="left").pack(fill="x", pady=(0, 6))
 
         for cls, label in self.classes.items():
@@ -53,7 +54,7 @@ class SamplesDialog:
         bottom.pack(fill="x", pady=(8, 0))
         self.calib_label = ttk.Label(bottom, text="", justify="left", wraplength=640)
         self.calib_label.pack(side="left", fill="x", expand=True)
-        ttk.Button(bottom, text="닫기", width=10, command=top.destroy).pack(side="right")
+        ttk.Button(bottom, text=tr("닫기"), width=10, command=top.destroy).pack(side="right")
         top.bind("<Escape>", lambda _e: top.destroy())
         self._refresh()
 
@@ -63,9 +64,9 @@ class SamplesDialog:
         box.pack(fill="both", expand=True, pady=4)
         bar = ttk.Frame(box)
         bar.pack(fill="x")
-        ttk.Button(bar, text="현재 화면 추가", command=lambda: self._add_from_screen(cls)).pack(side="left")
-        ttk.Button(bar, text="파일에서 가져오기", command=lambda: self._add_from_files(cls)).pack(side="left", padx=4)
-        ttk.Button(bar, text="모두 삭제", command=lambda: self._delete_all(cls)).pack(side="left")
+        ttk.Button(bar, text=tr("현재 화면 추가"), command=lambda: self._add_from_screen(cls)).pack(side="left")
+        ttk.Button(bar, text=tr("파일에서 가져오기"), command=lambda: self._add_from_files(cls)).pack(side="left", padx=4)
+        ttk.Button(bar, text=tr("모두 삭제"), command=lambda: self._delete_all(cls)).pack(side="left")
         count = ttk.Label(bar, text="")
         count.pack(side="left", padx=10)
 
@@ -85,9 +86,9 @@ class SamplesDialog:
             for child in sec["strip"].winfo_children():
                 child.destroy()
             files = paths.reference_paths(self.roi.id, cls)
-            sec["count"].configure(text=f"{len(files)}장")
+            sec["count"].configure(text=tr("{n}장", n=len(files)))
             if not files:
-                ttk.Label(sec["strip"], text="등록된 이미지 없음", foreground="#999999").pack(padx=8, pady=30)
+                ttk.Label(sec["strip"], text=tr("등록된 이미지 없음"), foreground="#999999").pack(padx=8, pady=30)
             for path in files:
                 self._add_thumb(sec["strip"], path, cls)
         self._update_calibration()
@@ -106,16 +107,16 @@ class SamplesDialog:
             self._photos.append(photo)
             pic = tk.Label(cell, image=photo, borderwidth=1, relief="solid", cursor="fleur")
         except Exception:
-            pic = ttk.Label(cell, text="(열 수 없음)", cursor="fleur")
+            pic = ttk.Label(cell, text=tr("(열 수 없음)"), cursor="fleur")
         pic.pack()
         pic.bind("<ButtonPress-1>", lambda e: self._drag_start(e, path, cls, photo))
         pic.bind("<B1-Motion>", self._drag_move)
         pic.bind("<ButtonRelease-1>", self._drag_end)
         pic.bind("<Button-3>", lambda e: self._context_menu(e, path, cls))
         name = os.path.basename(path)
-        ttk.Label(cell, text=name if size_ok else f"⚠ ROI와 크기 다름\n{name}",
-                  foreground="#555555" if size_ok else "#b71c1c", font=("맑은 고딕", 8)).pack()
-        ttk.Button(cell, text="삭제", width=6, command=lambda: self._delete_one(path)).pack()
+        ttk.Label(cell, text=name if size_ok else tr("⚠ ROI와 크기 다름\n{name}", name=name),
+                  foreground="#555555" if size_ok else "#b71c1c", font=("맑은 고딕", 8)).pack()  # i18n: skip
+        ttk.Button(cell, text=tr("삭제"), width=6, command=lambda: self._delete_one(path)).pack()
 
     # ---------- 다른 칸으로 옮기기 (끌어 놓기 / 우클릭) ----------
     def _drag_start(self, e, path: str, cls: str, photo):
@@ -139,7 +140,7 @@ class SamplesDialog:
             if d["photo"] is not None:
                 tk.Label(ghost, image=d["photo"], borderwidth=2, relief="solid").pack()
             else:
-                tk.Label(ghost, text="이미지", padx=10, pady=10).pack()
+                tk.Label(ghost, text=tr("이미지"), padx=10, pady=10).pack()
         d["ghost"].geometry(f"+{e.x_root + 12}+{e.y_root + 12}")
         target = self._section_at(e.x_root, e.y_root)
         if target != d["target"]:
@@ -173,19 +174,20 @@ class SamplesDialog:
         for cls, sec in self.sections.items():
             n = len(paths.reference_paths(self.roi.id, cls))
             if cls == target:
-                sec["count"].configure(text=f"{n}장   ⬇ 여기에 놓으면 '{self.classes[cls].split(' (')[0]}'(으)로 이동",
+                sec["count"].configure(text=tr("{n}장   ⬇ 여기에 놓으면 '{target}'(으)로 이동", n=n,
+                                                  target=self.classes[cls].split(' (')[0]),
                                        foreground="#b71c1c")
             else:
-                sec["count"].configure(text=f"{n}장", foreground="")
+                sec["count"].configure(text=tr("{n}장", n=n), foreground="")
 
     def _context_menu(self, e, path: str, cls: str):
         menu = tk.Menu(self.top, tearoff=False)
         for target, label in self.classes.items():
             if target != cls:
-                menu.add_command(label=f"→ {label.split(' (')[0]}(으)로 이동",
+                menu.add_command(label=tr("→ {target}(으)로 이동", target=label.split(' (')[0]),
                                  command=lambda t=target: self._move(path, t))
         menu.add_separator()
-        menu.add_command(label="삭제", command=lambda: self._delete_one(path))
+        menu.add_command(label=tr("삭제"), command=lambda: self._delete_one(path))
         try:
             menu.tk_popup(e.x_root, e.y_root)
         finally:
@@ -196,36 +198,37 @@ class SamplesDialog:
         try:
             os.replace(path, paths.new_reference_path(self.roi.id, target))
         except OSError as e:
-            messagebox.showerror("이동 실패", str(e), parent=self.top)
+            messagebox.showerror(tr("이동 실패"), str(e), parent=self.top)
         self._refresh()
 
     def _update_calibration(self):
         samples = worker.load_samples(self.roi.id)
         if not samples["ok"]:
-            self.calib_label.configure(text="⚠ OK(정상품) 샘플이 없어 판정하지 않습니다. OK 이미지를 먼저 등록하세요.",
+            self.calib_label.configure(text=tr("⚠ OK(정상품) 샘플이 없어 판정하지 않습니다. OK 이미지를 먼저 등록하세요."),
                                        foreground="#b71c1c")
             return
         lines = []
         warn = False
         try:
-            self.calib_label.configure(text="샘플로 판정 정확도 자체 검증 중…", foreground="#555555")
+            self.calib_label.configure(text=tr("샘플로 판정 정확도 자체 검증 중…"), foreground="#555555")
             self.top.update_idletasks()
             if self.is_match:
                 p = detectors.normalize_params("match", self.roi.params)
                 calib = detectors.match_calibration(samples, (self.roi.h, self.roi.w), p["max_shift"])
                 manual = p["ok_threshold"] > 0
-                lines.append(f"자동 계산 OK 허용 거리: {calib['threshold']:.2f}"
-                             + (f"  (이 ROI는 수동 값 {p['ok_threshold']:.2f} 사용 중)" if manual else "  ← 현재 사용 중"))
+                lines.append(tr("자동 계산 OK 허용 거리: {value}", value=f"{calib['threshold']:.2f}")
+                             + (tr("  (이 ROI는 수동 값 {value} 사용 중)", value=f"{p['ok_threshold']:.2f}")
+                                if manual else tr("  ← 현재 사용 중")))
                 lines.append(calib["quality"])
                 warn = calib["quality"].startswith("⚠")
             check = detectors.self_check(self.roi.detector, self.roi.params, samples)
             lines.append(check["summary"])
             warn = warn or check["summary"].startswith("⚠")
         except Exception as e:
-            lines.append(f"자체 검증 실패: {e}")
+            lines.append(tr("자체 검증 실패: {error}", error=e))
             warn = True
         if not samples["skip"] and self.roi.still_only:
-            lines.append("💡 셀이 없을 때 화면을 '무시'로 1장 이상 등록하면 빈 화면 오탐이 사라집니다.")
+            lines.append(tr("💡 셀이 없을 때 화면을 '무시'로 1장 이상 등록하면 빈 화면 오탐이 사라집니다."))
         self.calib_label.configure(text="\n".join(lines), foreground="#b71c1c" if warn else "#1b5e20")
 
     # ---------- 추가/삭제 ----------
@@ -238,15 +241,15 @@ class SamplesDialog:
             worker.save_png(frame, paths.new_reference_path(r.id, cls))
         except Exception as e:
             self._regrab()
-            messagebox.showerror("캡처 실패", str(e), parent=self.top)
+            messagebox.showerror(tr("캡처 실패"), str(e), parent=self.top)
             return
         self._regrab()
         self._refresh()
 
     def _add_from_files(self, cls: str):
         files = filedialog.askopenfilenames(
-            parent=self.top, title=f"{self.classes[cls]} 이미지 선택",
-            filetypes=[("이미지", "*.png *.jpg *.jpeg *.bmp"), ("모든 파일", "*.*")])
+            parent=self.top, title=tr("{label} 이미지 선택", label=self.classes[cls]),
+            filetypes=[(tr("이미지"), "*.png *.jpg *.jpeg *.bmp"), (tr("모든 파일"), "*.*")])
         if not files:
             return
         target = (self.roi.w, self.roi.h)
@@ -263,31 +266,31 @@ class SamplesDialog:
                 mismatched.append(f"{os.path.basename(f)} ({rgb.width}×{rgb.height})")
             loaded.append(rgb)
         if mismatched and not messagebox.askyesno(
-                "비율 확인",
-                f"ROI({target[0]}×{target[1]})와 가로세로 비율이 다른 이미지가 있습니다:\n"
+                tr("비율 확인"),
+                tr("ROI({w}×{h})와 가로세로 비율이 다른 이미지가 있습니다:\n", w=target[0], h=target[1])
                 + "\n".join(mismatched[:8]) +
-                "\n\nROI 크기로 늘려서 저장하면 판정이 부정확할 수 있습니다.\n"
-                "FMVS 화면에서 ROI 영역만 잘라낸 이미지를 권장합니다. 그래도 등록할까요?", parent=self.top):
+                tr("\n\nROI 크기로 늘려서 저장하면 판정이 부정확할 수 있습니다.\n"
+                   "FMVS 화면에서 ROI 영역만 잘라낸 이미지를 권장합니다. 그래도 등록할까요?"), parent=self.top):
             return
         for rgb in loaded:
             if rgb.size != target:
                 rgb = rgb.resize(target, Image.LANCZOS)
             rgb.save(paths.new_reference_path(self.roi.id, cls))
         if failed:
-            messagebox.showwarning("일부 실패", "열 수 없는 파일:\n" + "\n".join(failed), parent=self.top)
+            messagebox.showwarning(tr("일부 실패"), tr("열 수 없는 파일:\n") + "\n".join(failed), parent=self.top)
         self._refresh()
 
     def _delete_one(self, path: str):
         try:
             os.remove(path)
         except OSError as e:
-            messagebox.showerror("삭제 실패", str(e), parent=self.top)
+            messagebox.showerror(tr("삭제 실패"), str(e), parent=self.top)
         self._refresh()
 
     def _delete_all(self, cls: str):
         if not paths.reference_paths(self.roi.id, cls):
             return
-        if messagebox.askyesno("확인", f"{self.classes[cls]} 이미지를 모두 삭제할까요?", parent=self.top):
+        if messagebox.askyesno(tr("확인"), tr("{label} 이미지를 모두 삭제할까요?", label=self.classes[cls]), parent=self.top):
             paths.delete_references(self.roi.id, cls)
             self._refresh()
 

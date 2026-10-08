@@ -7,6 +7,8 @@ from typing import List, Optional, Sequence, Tuple
 
 from PIL import ImageTk
 
+from i18n import tr
+
 Rect = Tuple[int, int, int, int]
 _MIN_SIZE = 8
 _HELP = "드래그: ROI 지정  |  우클릭·Ctrl+Z: 마지막 취소  |  Enter: 완료  |  Esc: 취소"
@@ -38,7 +40,7 @@ class RegionSelector:
             self.canvas.create_rectangle(x0, y0, x0 + roi.w, y0 + roi.h,
                                          outline="#29b6f6", width=2, dash=(6, 4))
             self.canvas.create_text(x0 + 4, y0 + 4, text=roi.name, anchor="nw",
-                                    fill="#29b6f6", font=("맑은 고딕", 10, "bold"))
+                                    fill="#29b6f6", font=("맑은 고딕", 10, "bold"))  # i18n: skip
 
         self._build_banner()
         self.canvas.bind("<ButtonPress-1>", self._on_press)
@@ -54,14 +56,14 @@ class RegionSelector:
         # 주 모니터는 가상 화면 좌표 (0,0)에서 시작 → 캔버스 좌표 (-left, -top)
         primary_w = self.master.winfo_screenwidth()
         cx = -self.left + primary_w // 2
-        title = "ROI 1개 지정 (그리면 바로 적용)" if self.single else "여러 개 지정 가능"
+        title = tr("ROI 1개 지정 (그리면 바로 적용)") if self.single else tr("여러 개 지정 가능")
         frame = tk.Frame(self.canvas, bg="#212121", padx=10, pady=6)
-        tk.Label(frame, text=f"[ROI 지정] {title}", bg="#212121", fg="#ffeb3b",
-                 font=("맑은 고딕", 11, "bold")).pack(side="left")
-        tk.Label(frame, text="   " + _HELP, bg="#212121", fg="white",
-                 font=("맑은 고딕", 10)).pack(side="left")
-        tk.Button(frame, text="완료", width=8, command=self._finish).pack(side="left", padx=(12, 4))
-        tk.Button(frame, text="취소", width=8, command=self._cancel).pack(side="left")
+        tk.Label(frame, text=tr("[ROI 지정] {title}", title=title), bg="#212121", fg="#ffeb3b",
+                 font=("맑은 고딕", 11, "bold")).pack(side="left")  # i18n: skip
+        tk.Label(frame, text="   " + tr(_HELP), bg="#212121", fg="white",
+                 font=("맑은 고딕", 10)).pack(side="left")  # i18n: skip
+        tk.Button(frame, text=tr("완료"), width=8, command=self._finish).pack(side="left", padx=(12, 4))
+        tk.Button(frame, text=tr("취소"), width=8, command=self._cancel).pack(side="left")
         self.canvas.create_window(cx, -self.top + 12, window=frame, anchor="n")
 
     def _on_press(self, e):
@@ -84,8 +86,8 @@ class RegionSelector:
             return
         self.canvas.coords(self._live, x, y, x + w, y + h)
         label = self.canvas.create_text(x + 4, y + 4, anchor="nw", fill="#ff1744",
-                                        font=("맑은 고딕", 11, "bold"),
-                                        text=f"새 ROI {len(self.rects) + 1}  ({w}×{h})")
+                                        font=("맑은 고딕", 11, "bold"),  # i18n: skip
+                                        text=tr("새 ROI {n}  ({w}×{h})", n=len(self.rects) + 1, w=w, h=h))
         self.rects.append(((x, y, w, h), self._live, label))
         self._live = None
         if self.single:

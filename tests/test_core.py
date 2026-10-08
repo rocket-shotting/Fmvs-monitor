@@ -521,6 +521,21 @@ class WorkerFlowTests(unittest.TestCase):
         self.assertTrue(os.path.exists(alert_info["snapshot"]))
         self.assertTrue(os.path.exists(alert_info["raw_snapshot"]))
         self.assertEqual(alert_info["roi_detector"], "black")
+        from PIL import Image
+        with Image.open(alert_info["snapshot"]) as view, Image.open(alert_info["raw_snapshot"]) as raw:
+            self.assertEqual(raw.size, (160, 90))              # 원본 = ROI 크기 (샘플 등록용)
+            self.assertEqual(view.size, (480, 270))            # 보기용 = 3배 확대
+
+    def test_snapshot_view_scale_and_cap(self):
+        frame = noise(40, 60)
+        mask = np.zeros((40, 60), dtype=bool)
+        mask[10:20, 10:20] = True
+        view = worker.snapshot_view(frame, mask, 3)
+        self.assertEqual(view.shape[:2], (120, 180))
+        self.assertTrue((view[30:60, 30:60, 0] > view[30:60, 30:60, 1]).all())   # 확대된 불량 위치 표시
+        big = worker.snapshot_view(noise(900, 1200), None, 3)
+        self.assertLessEqual(max(big.shape[:2]), worker.SNAPSHOT_MAX_SIDE)        # 큰 ROI는 배율 자동 축소
+        self.assertEqual(worker.snapshot_view(frame, None, 1).shape, frame.shape)
 
     def test_repeat_and_teams_disabled(self):
         roi = config.ROI(name="cam2", duration_sec=0, repeat_min=1)

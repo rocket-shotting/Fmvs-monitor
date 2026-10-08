@@ -10,11 +10,14 @@
 
 순수 로직이며 화면(Tk)과 무관하다. 실행이 필요한 행동은 Action 목록으로 돌려주고 GUI가 수행한다."""
 import html
+import re
 import time
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Callable, Deque, Dict, List, Optional, Tuple
+
+from i18n import language, tr
 
 # 활동 피드 종류: (아이콘, 이름)
 FEED_KINDS = {
@@ -34,6 +37,16 @@ TREND_COUNT = 3             # 3회 이상 불량이면 에스컬레이션
 SKIP_PERSIST = 60.0         # 다른 화면(가려짐) 상태가 60초 이상 지속되면 안내
 RESTART_LIMIT = 3           # 검출 엔진 자동 재시작: 시간당 최대 횟수
 COOLDOWN = {"mass": 600.0, "trend": 1800.0, "skip": 600.0, "error": 300.0}
+# 정지 판정 상세 앞머리: '[정지 판정 HH:MM:SS] ' (언어와 무관하게 시각 형식으로 인식)
+_STOP_STAMP = re.compile(r"^\[[^\]]*\d{2}:\d{2}:\d{2}\]")
+
+
+def _user_stop(reason: str) -> bool:
+    return "사용자" in reason or "user" in reason.lower()  # i18n: skip
+
+
+def _error_stop(reason: str) -> bool:
+    return "오류" in reason or "error" in reason.lower()  # i18n: skip
 
 
 @dataclass
@@ -111,46 +124,49 @@ class VisionAgent:
         self._recent_alerts.clear()
         self._skip_since.clear()
         kinds = Counter(r.detector_label().split(" (")[0] for r in rois if r.enabled)
-        self.say("boot", f"비전 에이전트 기동 – 감시 대상 ROI {self.enabled_count}개")
+        self.say("boot", tr("비전 에이전트 기동 – 감시 대상 ROI {n}개", n=self.enabled_count))
         if kinds:
-            self.say("boot", "판정 엔진 로드: " + ", ".join(f"{k} {v}" for k, v in kinds.most_common()))
+            self.say("boot", tr("판정 엔진 로드: {engines}",
+                                engines=", ".join(f"{k} {v}" for k, v in kinds.most_common())))
         total = sum(sample_counts.values())
         if total:
-            self.say("boot", f"샘플/기준 이미지 {total}장 인덱싱 완료 · 자동 기준 보정 준비")
+            self.say("boot", tr("샘플/기준 이미지 {n}장 인덱싱 완료 · 자동 기준 보정 준비", n=total))
         still = sum(1 for r in rois if r.enabled and r.still_only)
         if still:
-            self.say("boot", f"움직임 추적 모드 ROI {still}개 – 정지 순간에만 판정")
-        self.say("observe", "실시간 관찰 시작")
+            self.say("boot", tr("움직임 추적 모드 ROI {n}개 – 정지 순간에만 판정", n=still))
+        self.say("observe", tr("실시간 관찰 시작"))
 
     def shutdown(self, reason: str) -> None:
-        self.say("act" if "사용자" in reason else "warn", f"검출 엔진 정지 ({reason})")
+        self.say("act" if _user_stop(reason) else "warn", tr("검출 엔진 정지 ({reason})", reason=reason))
         self.started_at = None
 
     # ---------------- 관찰 ----------------
     def on_status(self, roi_id: str, state: str, detail: str) -> None:
         st = self.stats[roi_id]
         changed = (state, detail) != (st.last_state, st.last_detail)
-        judged_on_stop = detail.startswith("[정지 판정")
+        judged_on_stop = bool(_STOP_STAMP.match(detail))
         # 판정 수: 연속 판정은 매 검사마다, '정지 시 판정'은 새 판정이 나왔을 때만 센다
         if state in ("ok", "alarm", "pending") and (changed or not judged_on_stop):
             st.inspections += 1
             if state == "ok":
                 st.ok += 1
         if judged_on_stop and changed and state in ("ok", "alarm"):
-            self.say("observe", f"[{self._name(roi_id)}] 정지 감지 → 판정 {'OK' if state == 'ok' else 'NG'}")
+            self.say("observe", tr("[{name}] 정지 감지 → 판정 {result}", name=self._name(roi_id),
+                                   result="OK" if state == "ok" else "NG"))
         st.last_state, st.last_detail = state, detail
 
         now = self.clock()
         if state == "skip":
             since = self._skip_since.setdefault(roi_id, now)
             if now - since >= SKIP_PERSIST and self._ready(f"skip:{roi_id}", "skip"):
-                self.say("think", f"[{self._name(roi_id)}] {int(now - since)}초째 다른 화면 – "
-                                  "FMVS 창이 가려졌거나 최소화된 것으로 추정")
-                self.say("act", "오탐 방지를 위해 판정 보류 유지 · FMVS 화면을 앞으로 가져와 주세요")
+                self.say("think", tr("[{name}] {sec}초째 다른 화면 – "
+                                     "FMVS 창이 가려졌거나 최소화된 것으로 추정",
+                                     name=self._name(roi_id), sec=int(now - since)))
+                self.say("act", tr("오탐 방지를 위해 판정 보류 유지 · FMVS 화면을 앞으로 가져와 주세요"))
         else:
             self._skip_since.pop(roi_id, None)
         if state == "error" and self._ready(f"error:{roi_id}", "error"):
-            self.say("warn", f"[{self._name(roi_id)}] 검사 오류 – {detail[:80]}")
+            self.say("warn", tr("[{name}] 검사 오류 – {detail}", name=self._name(roi_id), detail=detail[:80]))
 
     def on_alert(self, info: dict) -> List[Action]:
         now = self.clock()
@@ -162,9 +178,9 @@ class VisionAgent:
         hour = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H")
         self.hourly_ng[hour] += 1
         self.roi_hourly[roi_id][hour] += 1
-        self.timeline.append((now, name, "NG 지속" if info.get("kind") == "repeat" else "NG",
+        self.timeline.append((now, name, tr("NG 지속") if info.get("kind") == "repeat" else "NG",
                               info.get("detail", ""), info.get("snapshot")))
-        self.say("observe", f"[{name}] 이상 감지 – {info.get('detail', '')[:70]}")
+        self.say("observe", tr("[{name}] 이상 감지 – {detail}", name=name, detail=info.get("detail", "")[:70]))
 
         # 1) 동시다발 경보 → 화면 전체 문제 추론
         self._recent_alerts.append((now, roi_id))
@@ -173,52 +189,57 @@ class VisionAgent:
         rois = {r for _t, r in self._recent_alerts}
         if (len(rois) >= MASS_MIN_ROIS and self.enabled_count
                 and len(rois) >= self.enabled_count * MASS_RATIO and self._ready("mass", "mass")):
-            self.say("think", f"{int(MASS_WINDOW)}초 안에 ROI {len(rois)}/{self.enabled_count}개 동시 이상 → "
-                              "개별 불량이 아니라 FMVS 화면 전체 문제(레이아웃 변경·영상 끊김·화면 꺼짐)로 추론")
-            self.say("act", "원인 추정을 담은 통합 알림 전송")
-            return [Action("teams", "FMVS 화면 전체 이상 의심",
-                           f"{int(MASS_WINDOW)}초 안에 ROI {len(rois)}개에서 동시에 이상이 감지되었습니다. "
-                           "개별 불량보다는 FMVS 화면 레이아웃 변경, 카메라 영상 끊김, 모니터 꺼짐 가능성이 높습니다. "
-                           "FMVS 화면 상태를 먼저 확인해 주세요.")]
+            self.say("think", tr("{sec}초 안에 ROI {n}/{total}개 동시 이상 → "
+                                 "개별 불량이 아니라 FMVS 화면 전체 문제(레이아웃 변경·영상 끊김·화면 꺼짐)로 추론",
+                                 sec=int(MASS_WINDOW), n=len(rois), total=self.enabled_count))
+            self.say("act", tr("원인 추정을 담은 통합 알림 전송"))
+            return [Action("teams", tr("FMVS 화면 전체 이상 의심"),
+                           tr("{sec}초 안에 ROI {n}개에서 동시에 이상이 감지되었습니다. "
+                              "개별 불량보다는 FMVS 화면 레이아웃 변경, 카메라 영상 끊김, 모니터 꺼짐 가능성이 높습니다. "
+                              "FMVS 화면 상태를 먼저 확인해 주세요.", sec=int(MASS_WINDOW), n=len(rois)))]
         # 2) 같은 ROI 연속 불량 → 설비 점검 에스컬레이션
         recent = [t for t in st.ng_times if now - t <= TREND_WINDOW]
         if len(recent) >= TREND_COUNT and self._ready(f"trend:{roi_id}", "trend"):
-            self.say("think", f"[{name}] {int(TREND_WINDOW // 60)}분 안에 불량 {len(recent)}회 → "
-                              "일시적 이상이 아닌 공정/설비 문제 추세로 판단")
-            self.say("act", "설비 점검 에스컬레이션 전송")
-            return [Action("teams", f"[{name}] 연속 불량 – 설비 점검 요청",
-                           f"최근 {int(TREND_WINDOW // 60)}분 동안 [{name}]에서 불량이 {len(recent)}회 감지되었습니다. "
-                           "일시적 이상이 아닌 공정 추세로 보이니 설비 점검을 권장합니다.")]
+            self.say("think", tr("[{name}] {min}분 안에 불량 {n}회 → "
+                                 "일시적 이상이 아닌 공정/설비 문제 추세로 판단",
+                                 name=name, min=int(TREND_WINDOW // 60), n=len(recent)))
+            self.say("act", tr("설비 점검 에스컬레이션 전송"))
+            return [Action("teams", tr("[{name}] 연속 불량 – 설비 점검 요청", name=name),
+                           tr("최근 {min}분 동안 [{name}]에서 불량이 {n}회 감지되었습니다. "
+                              "일시적 이상이 아닌 공정 추세로 보이니 설비 점검을 권장합니다.",
+                              min=int(TREND_WINDOW // 60), name=name, n=len(recent)))]
         return []
 
     def on_recover(self, info: dict) -> None:
-        self.timeline.append((self.clock(), info["roi_name"], "복구", info.get("detail", ""), None))
-        self.say("observe", f"[{info['roi_name']}] 정상 복구 확인")
+        self.timeline.append((self.clock(), info["roi_name"], tr("복구"), info.get("detail", ""), None))
+        self.say("observe", tr("[{name}] 정상 복구 확인", name=info["roi_name"]))
 
     def on_monitor_stopped(self, reason: str, auto_restart: bool) -> List[Action]:
         """검출 엔진이 멈췄을 때. 오류로 멈췄으면 자동 재시작을 결정한다."""
         now = self.clock()
         self.shutdown(reason)
-        if "오류" not in reason or not auto_restart:
+        if not _error_stop(reason) or not auto_restart:
             return []
         while self._restarts and now - self._restarts[0] > 3600:
             self._restarts.popleft()
         if len(self._restarts) >= RESTART_LIMIT:
-            self.say("think", f"최근 1시간 자동 재시작 {RESTART_LIMIT}회 소진 → 반복 장애로 판단, 재시작 중단")
-            return [Action("teams", "FMVS 검출기 반복 장애",
-                           f"검출 엔진이 1시간 안에 {RESTART_LIMIT}회 넘게 오류로 멈췄습니다. 현장 확인이 필요합니다. ({reason})")]
+            self.say("think", tr("최근 1시간 자동 재시작 {n}회 소진 → 반복 장애로 판단, 재시작 중단", n=RESTART_LIMIT))
+            return [Action("teams", tr("FMVS 검출기 반복 장애"),
+                           tr("검출 엔진이 1시간 안에 {n}회 넘게 오류로 멈췄습니다. 현장 확인이 필요합니다. ({reason})",
+                              n=RESTART_LIMIT, reason=reason))]
         self._restarts.append(now)
-        self.say("think", "일시적 오류로 판단 → 자가 복구 시도")
-        self.say("act", f"검출 엔진 자동 재시작 ({len(self._restarts)}/{RESTART_LIMIT})")
+        self.say("think", tr("일시적 오류로 판단 → 자가 복구 시도"))
+        self.say("act", tr("검출 엔진 자동 재시작 ({n}/{limit})", n=len(self._restarts), limit=RESTART_LIMIT))
         return [Action("restart")]
 
     # ---------------- 학습 ----------------
     def on_feedback(self, roi_name: str, cls: str, before: Optional[float], after: Optional[float]) -> None:
-        label = {"ok": "OK(오탐 정정)", "ng": "NG", "skip": "무시"}.get(cls, cls)
-        self.say("learn", f"[{roi_name}] 운영자 피드백 반영: {label} 샘플 +1")
+        label = {"ok": tr("OK(오탐 정정)"), "ng": "NG", "skip": tr("무시")}.get(cls, cls)
+        self.say("learn", tr("[{name}] 운영자 피드백 반영: {label} 샘플 +1", name=roi_name, label=label))
         if before is not None and after is not None:
             arrow = "↑" if after > before else ("↓" if after < before else "=")
-            self.say("learn", f"[{roi_name}] OK 허용 거리 자동 재보정 {before:.2f} {arrow} {after:.2f}")
+            self.say("learn", tr("[{name}] OK 허용 거리 자동 재보정 {before} {arrow} {after}", name=roi_name,
+                                 before=f"{before:.2f}", arrow=arrow, after=f"{after:.2f}"))
 
     # ---------------- 교대 리포트 ----------------
     def due_shift(self, shift_times: str) -> Optional[str]:
@@ -272,9 +293,9 @@ class VisionAgent:
         k = self.kpis()
         top = sorted(((s.ng, self._name(rid)) for rid, s in self.stats.items() if s.ng), reverse=True)[:3]
         ok_rate = f"{k['ok_rate']:.2f}%" if k["ok_rate"] is not None else "-"
-        text = f"판정 {k['inspections']:,}회 · NG {k['ng']}건 · 정상률 {ok_rate}"
+        text = tr("판정 {n}회 · NG {ng}건 · 정상률 {rate}", n=f"{k['inspections']:,}", ng=k["ng"], rate=ok_rate)
         if top:
-            text += " · NG 상위: " + ", ".join(f"{n} {c}건" for c, n in top)
+            text += tr(" · NG 상위: {items}", items=", ".join(tr("{name} {n}건", name=n, n=c) for c, n in top))
         return text
 
     def report_html(self, title: str, rois, frames: Optional[Dict[str, object]] = None,
@@ -290,7 +311,7 @@ class VisionAgent:
             last = datetime.fromtimestamp(s.last_ng).strftime("%H:%M:%S") if s.last_ng else "-"
             peak = max([c for _h, c in t["series"]] + [1])
             bars = "".join(f"<i style='height:{max(2, int(22 * c / peak)) if c else 2}px' "
-                           f"class='{'b ng' if c else 'b'}' title='{h}시 {c}건'></i>" for h, c in t["series"])
+                           f"class='{'b ng' if c else 'b'}' title='{tr('{h}시 {n}건', h=h, n=c)}'></i>" for h, c in t["series"])
             rows.append(f"<tr><td>{html.escape(r.name)}</td><td>{html.escape(r.detector_label())}</td>"
                         f"<td>{s.inspections:,}</td><td class='{'ng' if s.ng else ''}'>{s.ng}</td><td>{last}</td>"
                         f"<td><div class='spark'>{bars}</div></td><td>{html.escape(r.assignee or '-')}</td></tr>")
@@ -313,11 +334,19 @@ class VisionAgent:
         events = "".join(
             f"<tr><td>{datetime.fromtimestamp(t).strftime('%m-%d %H:%M:%S')}</td><td>{html.escape(n)}</td>"
             f"<td class='{'ng' if kind.startswith('NG') else ''}'>{html.escape(kind)}</td><td>{html.escape(d)}</td></tr>"
-            for t, n, kind, d, _s in list(self.timeline)[-200:][::-1]) or "<tr><td colspan=4>기록 없음</td></tr>"
+            for t, n, kind, d, _s in list(self.timeline)[-200:][::-1]) or f"<tr><td colspan=4>{tr('기록 없음')}</td></tr>"
         insights = "".join(f"<li>{html.escape(f.text)}</li>" for f in self.feed if f.kind in ("think", "learn"))
         ok_rate = f"{k['ok_rate']:.2f}%" if k["ok_rate"] is not None else "-"
         hours, mins = int(k["uptime"] // 3600), int(k["uptime"] % 3600 // 60)
-        return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>{html.escape(title)}</title>
+        more = tr(", 최근 {n}장까지", n=max_images) if len(gallery) >= max_images else ""
+        L = {key: tr(key) for key in (
+            "가동 시간", "판정 수", "NG 감지", "정상률", "감시 ROI", "ROI별 현황 · 최근 12시간 NG 추이", "검출 유형",
+            "마지막 NG", "NG 추이", "담당자", "NG 이미지 없음", "리포트 작성 시점 ROI 화면",
+            "검출 중이 아니어서 현재 화면 없음", "에이전트 판단·학습 기록", "특이사항 없음", "이벤트 타임라인",
+            "시각", "구분", "상세")}
+        written = tr("작성 {time} · FMVS 비전 에이전트 자동 리포트", time=f"{now:%Y-%m-%d %H:%M}")
+        gallery_title = tr("NG 탐지 이미지 ({n}장{more})", n=len(gallery), more=more)
+        return f"""<!doctype html><html lang="{language()}"><head><meta charset="utf-8"><title>{html.escape(title)}</title>
 <style>
 body{{font-family:'Malgun Gothic',sans-serif;background:#0b1220;color:#e6edf7;margin:32px}}
 h1{{color:#22d3ee;margin:0}} .sub{{color:#8aa0c0;margin:4px 0 24px}}
@@ -335,21 +364,21 @@ figure{{margin:0;background:#111a2e;border:1px solid #23304d;border-radius:8px;p
 figure img{{display:block;max-width:360px;border-radius:4px}} .ngfig{{border-color:#7f1d1d}}
 figcaption{{font-size:12px;color:#cbd5e1;margin-top:4px;max-width:360px}}
 </style></head><body>
-<h1>◆ {html.escape(title)}</h1><div class="sub">작성 {now:%Y-%m-%d %H:%M} · FMVS 비전 에이전트 자동 리포트</div>
+<h1>◆ {html.escape(title)}</h1><div class="sub">{written}</div>
 <div class="kpis">
-<div class="kpi"><span>가동 시간</span><b>{hours}h {mins:02d}m</b></div>
-<div class="kpi"><span>판정 수</span><b>{k['inspections']:,}</b></div>
-<div class="kpi"><span>NG 감지</span><b style="color:#ef4444">{k['ng']}</b></div>
-<div class="kpi"><span>정상률</span><b>{ok_rate}</b></div>
-<div class="kpi"><span>감시 ROI</span><b>{sum(1 for r in rois if r.enabled)}</b></div>
+<div class="kpi"><span>{L['가동 시간']}</span><b>{hours}h {mins:02d}m</b></div>
+<div class="kpi"><span>{L['판정 수']}</span><b>{k['inspections']:,}</b></div>
+<div class="kpi"><span>{L['NG 감지']}</span><b style="color:#ef4444">{k['ng']}</b></div>
+<div class="kpi"><span>{L['정상률']}</span><b>{ok_rate}</b></div>
+<div class="kpi"><span>{L['감시 ROI']}</span><b>{sum(1 for r in rois if r.enabled)}</b></div>
 </div>
-<h2>ROI별 현황 · 최근 12시간 NG 추이</h2><table><tr><th>ROI</th><th>검출 유형</th><th>판정 수</th><th>NG</th>
-<th>마지막 NG</th><th>NG 추이</th><th>담당자</th></tr>{''.join(rows)}</table>
-<h2>NG 탐지 이미지 ({len(gallery)}장{', 최근 ' + str(max_images) + '장까지' if len(gallery) >= max_images else ''})</h2>
-<div class="gal">{''.join(gallery) or '<p>NG 이미지 없음</p>'}</div>
-<h2>리포트 작성 시점 ROI 화면</h2><div class="gal">{''.join(live) or '<p>검출 중이 아니어서 현재 화면 없음</p>'}</div>
-<h2>에이전트 판단·학습 기록</h2><ul>{insights or '<li>특이사항 없음</li>'}</ul>
-<h2>이벤트 타임라인</h2><table><tr><th>시각</th><th>ROI</th><th>구분</th><th>상세</th></tr>{events}</table>
+<h2>{L['ROI별 현황 · 최근 12시간 NG 추이']}</h2><table><tr><th>ROI</th><th>{L['검출 유형']}</th><th>{L['판정 수']}</th><th>NG</th>
+<th>{L['마지막 NG']}</th><th>{L['NG 추이']}</th><th>{L['담당자']}</th></tr>{''.join(rows)}</table>
+<h2>{gallery_title}</h2>
+<div class="gal">{''.join(gallery) or '<p>' + L['NG 이미지 없음'] + '</p>'}</div>
+<h2>{L['리포트 작성 시점 ROI 화면']}</h2><div class="gal">{''.join(live) or '<p>' + L['검출 중이 아니어서 현재 화면 없음'] + '</p>'}</div>
+<h2>{L['에이전트 판단·학습 기록']}</h2><ul>{insights or '<li>' + L['특이사항 없음'] + '</li>'}</ul>
+<h2>{L['이벤트 타임라인']}</h2><table><tr><th>{L['시각']}</th><th>ROI</th><th>{L['구분']}</th><th>{L['상세']}</th></tr>{events}</table>
 </body></html>"""
 
 

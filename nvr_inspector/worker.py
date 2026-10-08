@@ -25,6 +25,7 @@ import paths
 import winutil
 from capture import Grabber
 from config import ROI, AppConfig
+from i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,25 @@ def resize_samples(roi_id: str, w: int, h: int) -> int:
             save_png(np.asarray(resized), path)
             changed += 1
     return changed
+
+
+SNAPSHOT_SCALE = 3            # NG 스냅샷 확대 배율 (보기용)
+SNAPSHOT_MAX_SIDE = 3000      # 확대 후 긴 변 최대 (큰 ROI에서 파일이 지나치게 커지지 않도록)
+
+
+def snapshot_view(frame: np.ndarray, mask, scale: int) -> np.ndarray:
+    """스냅샷 보기용 이미지: scale배 확대 + 불량 위치 빨간 표시 (확대 후 표시해 경계가 선명)."""
+    from PIL import Image
+    h, w = frame.shape[:2]
+    scale = max(1, int(scale))
+    while scale > 1 and max(h, w) * scale > SNAPSHOT_MAX_SIDE:
+        scale -= 1
+    if scale == 1:
+        return detectors.overlay_defects(frame, mask)
+    big = np.asarray(Image.fromarray(frame).resize((w * scale, h * scale), Image.LANCZOS))
+    if mask is not None and mask.any():
+        mask = np.repeat(np.repeat(mask, scale, axis=0), scale, axis=1)
+    return detectors.overlay_defects(big, mask)
 
 
 def save_png(rgb: np.ndarray, path: str) -> None:
@@ -131,7 +151,7 @@ class Monitor(threading.Thread):
 
     # ---- 스레드 본체 ----
     def run(self) -> None:
-        reason = "사용자 중지"
+        reason = tr("사용자 중지")
         try:
             with Grabber() as grabber:
                 while not self._stop_event.is_set():
@@ -143,7 +163,7 @@ class Monitor(threading.Thread):
                     self._stop_event.wait(max(0.05, cfg.interval_sec - elapsed))
         except Exception as e:
             log.exception("검출 스레드 비정상 종료")
-            reason = f"오류로 중지됨: {e}"
+            reason = tr("오류로 중지됨: {e}", e=e)
         self._events.put(("stopped", reason))
 
     def _emit(self, *event) -> None:
@@ -187,7 +207,7 @@ class Monitor(threading.Thread):
                 self._runtime[roi.id] = rt
             if not roi.enabled:
                 rt.abnormal_since, rt.alerted = None, False
-                self._emit("status", roi.id, "off", "사용 안 함")
+                self._emit("status", roi.id, "off", tr("사용 안 함"))
                 continue
             try:
                 self._check(cfg, roi, rt, grabber)
@@ -197,7 +217,7 @@ class Monitor(threading.Thread):
                 if msg != rt.last_error or now - rt.last_error_at > _ERROR_LOG_INTERVAL:
                     rt.last_error, rt.last_error_at = msg, now
                     log.exception("[%s] 검사 오류", roi.name)
-                    self._emit("log", "error", f"[{roi.name}] 검사 오류: {msg}")
+                    self._emit("log", "error", tr("[{roi}] 검사 오류: {msg}", roi=roi.name, msg=msg))
                 self._emit("status", roi.id, "error", msg)
         for stale in set(self._runtime) - alive:
             del self._runtime[stale]
@@ -226,13 +246,13 @@ class Monitor(threading.Thread):
                 log.warning("창 목록 조회 실패, 중심점 확인으로 대체: %s", e)
                 self._windows = "fallback"
         if self._windows == "locked":
-            return occlusion.Visibility(False, "화면 잠금 상태 – 판정 안 함")
+            return occlusion.Visibility(False, tr("화면 잠금 상태 – 판정 안 함"))
         if self._windows == "fallback":
             cx, cy = roi.center()
             proc = winutil.process_name_at(cx, cy)
             if proc and proc.lower() == roi.expected_process.lower():
                 return occlusion.Visibility(True, "")
-            return occlusion.Visibility(False, f"다른 화면: {proc or '확인 불가(화면 잠금 등)'}")
+            return occlusion.Visibility(False, tr("다른 화면: {proc}", proc=proc or tr("확인 불가(화면 잠금 등)")))
         return occlusion.roi_visibility((roi.x, roi.y, roi.w, roi.h), self._windows, roi.expected_process)
 
     def _check(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, grabber: Grabber) -> None:
@@ -275,7 +295,8 @@ class Monitor(threading.Thread):
         elapsed = now - rt.abnormal_since
         if elapsed < roi.duration_sec:
             self._emit("status", roi.id, "pending",
-                       f"{res.detail} · {elapsed:.0f}/{roi.duration_sec:.0f}초")
+                       res.detail + tr(" · {elapsed}/{total}초", elapsed=f"{elapsed:.0f}",
+                                       total=f"{roi.duration_sec:.0f}"))
             return
         repeat_due = roi.repeat_min > 0 and now - rt.last_alert >= roi.repeat_min * 60
         if not rt.alerted or repeat_due:
@@ -283,7 +304,7 @@ class Monitor(threading.Thread):
             snapshot, raw = self._save_snapshot(roi, frame, res.mask)
             self._fire(cfg, roi, kind, res.detail, elapsed, snapshot, raw)
             rt.alerted, rt.last_alert = True, now
-        self._emit("status", roi.id, "alarm", f"{res.detail} · {notifier.fmt_duration(elapsed)} 지속")
+        self._emit("status", roi.id, "alarm", res.detail + tr(" · {dur} 지속", dur=notifier.fmt_duration(elapsed)))
 
     def _send_thumbnail(self, roi: ROI, rt: RoiRuntime, frame: np.ndarray) -> None:
         """대시보드 카메라 월에 띄울 축소 이미지 (ROI당 초당 1회 이하)."""
@@ -306,12 +327,14 @@ class Monitor(threading.Thread):
         if motion is None or motion > roi.still_diff:
             rt.still_count, rt.inspected = 0, False
             amount = "-" if motion is None else f"{motion:.1f}"
-            self._emit("status", roi.id, "moving", f"움직임 – 정지 대기 (변화량 {amount} > {roi.still_diff:g})")
+            self._emit("status", roi.id, "moving", tr("움직임 – 정지 대기 (변화량 {amount} > {limit})",
+                                                        amount=amount, limit=f"{roi.still_diff:g}"))
             return
         rt.still_count += 1
         if rt.still_count < roi.still_frames:
             self._emit("status", roi.id, "moving",
-                       f"정지 확인 중 {rt.still_count}/{roi.still_frames} (변화량 {motion:.1f})")
+                       tr("정지 확인 중 {n}/{total} (변화량 {motion})", n=rt.still_count,
+                          total=roi.still_frames, motion=f"{motion:.1f}"))
             return
         if rt.inspected:   # 이번 정지는 이미 판정함 → 결과 유지
             self._emit("status", roi.id, *rt.last_result)
@@ -320,7 +343,7 @@ class Monitor(threading.Thread):
         rt.inspected = True
         ref = self._references(roi) if roi.detector in detectors.REFERENCE_KINDS else None
         res = detectors.evaluate(roi.detector, roi.params, frame, rt.det_state, reference=ref)
-        stamp = f"[정지 판정 {datetime.now():%H:%M:%S}] "
+        stamp = tr("[정지 판정 {time}] ", time=f"{datetime.now():%H:%M:%S}")
         if res.abnormal is None:
             rt.last_result = ("wait", stamp + res.detail)
         elif res.abnormal:
@@ -336,17 +359,18 @@ class Monitor(threading.Thread):
         self._emit("status", roi.id, *rt.last_result)
 
     def _save_snapshot(self, roi: ROI, frame: np.ndarray, mask):
-        """원본(샘플 등록용)과, 불량 위치가 있으면 빨간 표시본을 저장. 반환: (보기용, 원본)."""
+        """확대 보기용(불량 위치 빨간 표시 포함)과 원본(ROI 크기 – 샘플 등록용)을 저장. 반환: (보기용, 원본)."""
         try:
             base = os.path.join(paths.SNAPSHOT_DIR,
                                 f"{datetime.now():%Y%m%d_%H%M%S}_{_safe_filename(roi.name)}")
-            raw = base + ".png"
+            raw = base + "_원본.png"  # i18n: skip
             save_png(frame, raw)
-            if mask is None or not mask.any():
+            scale = getattr(self._cfg, "snapshot_scale", SNAPSHOT_SCALE)
+            if scale <= 1 and (mask is None or not mask.any()):
                 return raw, raw
-            marked = base + "_표시.png"
-            save_png(detectors.overlay_defects(frame, mask), marked)
-            return marked, raw
+            view = base + ".png"
+            save_png(snapshot_view(frame, mask, scale), view)
+            return view, raw
         except Exception as e:
             log.warning("스냅샷 저장 실패: %s", e)
             return None, None
@@ -363,6 +387,7 @@ class Monitor(threading.Thread):
         }
         label = {"alert": "이상 감지", "repeat": "재알림", "recover": "복구"}[kind]
         log.warning("[%s] %s – %s", roi.name, label, detail)
+        label = tr(label)
         self._emit("recover" if kind == "recover" else "alert", info)
         if not cfg.teams_enabled:
             return

@@ -12,6 +12,8 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
+from i18n import tr
+
 log = logging.getLogger(__name__)
 
 RETRY_DELAYS = (2, 5, 15)
@@ -42,10 +44,10 @@ def fmt_duration(sec: Optional[float]) -> str:
         return "-"
     sec = int(sec)
     if sec < 60:
-        return f"{sec}초"
+        return tr("{s}초", s=sec)
     if sec < 3600:
-        return f"{sec // 60}분 {sec % 60}초"
-    return f"{sec // 3600}시간 {sec % 3600 // 60}분"
+        return tr("{m}분 {s}초", m=sec // 60, s=sec % 60)
+    return tr("{h}시간 {m}분", h=sec // 3600, m=sec % 3600 // 60)
 
 
 def build_payload(kind: str, *, roi_name: str, detector_label: str, detail: str,
@@ -62,23 +64,25 @@ def build_payload(kind: str, *, roi_name: str, detector_label: str, detail: str,
         "test": ("🔔 FMVS 검출기 테스트 알림", "Accent"),
     }
     title, color = titles.get(kind, titles["alert"])
-    who = assignee or "미지정"
+    title = tr(title)
+    who = assignee or tr("미지정")
     if assignee_email:
         who = f"{who} ({assignee_email})"
     if kind == "recover":
-        text = f"[{roi_name}] 화면이 정상으로 돌아왔습니다."
+        text = tr("[{roi}] 화면이 정상으로 돌아왔습니다.", roi=roi_name)
     elif kind == "test":
-        text = "Teams 알림 연결 테스트입니다. 이 메시지가 보이면 설정이 완료된 것입니다."
+        text = tr("Teams 알림 연결 테스트입니다. 이 메시지가 보이면 설정이 완료된 것입니다.")
     else:
-        text = f"[{roi_name}] 화면에서 '{detector_label}' 이상이 감지되었습니다. 확인 부탁드립니다."
+        text = tr("[{roi}] 화면에서 '{detector}' 이상이 감지되었습니다. 확인 부탁드립니다.",
+                  roi=roi_name, detector=detector_label)
     facts = [
         ("ROI", roi_name),
-        ("검출 유형", detector_label),
-        ("측정값", detail or "-"),
-        ("지속 시간", fmt_duration(elapsed_sec)),
-        ("담당자", who),
+        (tr("검출 유형"), detector_label),
+        (tr("측정값"), detail or "-"),
+        (tr("지속 시간"), fmt_duration(elapsed_sec)),
+        (tr("담당자"), who),
         ("PC", pc_label),
-        ("시각", when),
+        (tr("시각"), when),
     ]
     return {
         "event": kind,
@@ -99,8 +103,8 @@ def build_payload(kind: str, *, roi_name: str, detector_label: str, detail: str,
 
 def build_agent_payload(title: str, message: str, *, pc_label: str, when: str) -> dict:
     """에이전트 판단(동시다발 이상·연속 불량·반복 장애)과 근무 리포트 요약용 메시지."""
-    full_title = f"🧠 FMVS 비전 에이전트 – {title}"
-    facts = [("PC", pc_label), ("시각", when)]
+    full_title = tr("🧠 FMVS 비전 에이전트 – {title}", title=title)
+    facts = [("PC", pc_label), (tr("시각"), when)]
     return {
         "event": "agent",
         "title": full_title,
@@ -130,9 +134,9 @@ def validate_url(url: str) -> Optional[str]:
     """문제가 있으면 오류 메시지, 정상이면 None."""
     url = (url or "").strip()
     if not url:
-        return "Webhook URL이 비어 있습니다."
+        return tr("Webhook URL이 비어 있습니다.")
     if not url.lower().startswith("https://"):
-        return "Webhook URL은 https:// 로 시작해야 합니다."
+        return tr("Webhook URL은 https:// 로 시작해야 합니다.")
     return None
 
 
@@ -147,7 +151,7 @@ class TeamsNotifier:
     def send(self, url: str, payload: dict, label: str) -> None:
         err = validate_url(url)
         if err:
-            self._report("warning", f"Teams 전송 건너뜀 ({label}): {err}")
+            self._report("warning", tr("Teams 전송 건너뜀 ({label}): {err}", label=label, err=err))
             return
         self._queue.put((url.strip(), payload, label))
 
@@ -165,7 +169,7 @@ class TeamsNotifier:
             try:
                 status = post_json(url, payload)
                 if 200 <= status < 300:
-                    self._report("info", f"Teams 전송 완료: {label}")
+                    self._report("info", tr("Teams 전송 완료: {label}", label=label))
                     return
                 last_error = f"HTTP {status}"
             except urllib.error.HTTPError as e:
@@ -176,4 +180,4 @@ class TeamsNotifier:
                 last_error = str(e) or e.__class__.__name__
             if attempt < len(RETRY_DELAYS):
                 time.sleep(RETRY_DELAYS[attempt])
-        self._report("error", f"Teams 전송 실패: {label} – {last_error}")
+        self._report("error", tr("Teams 전송 실패: {label} – {error}", label=label, error=last_error))

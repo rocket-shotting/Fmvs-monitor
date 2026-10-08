@@ -9,6 +9,8 @@ from typing import Iterable, NamedTuple, Tuple
 
 import numpy as np
 
+from i18n import tr
+
 _EDGE_TOL = 2         # 창 가장자리 1~2px 반올림 오차는 가림으로 보지 않음
 _MAX_GRID = 400       # 큰 ROI는 격자를 줄여 계산 (정확도 1~2px)
 OWN_LABEL = "FMVS 창(대시보드·팝업)"
@@ -22,6 +24,11 @@ class Visibility(NamedTuple):
 
 def _label(win) -> str:
     return OWN_LABEL if getattr(win, "own", False) else win.process
+
+
+def _shown(name: str) -> str:
+    """화면 표시용 이름 (FMVS 자체 창 이름만 번역)."""
+    return tr(OWN_LABEL) if name == OWN_LABEL else name
 
 
 def roi_visibility(roi_rect: Tuple[int, int, int, int], windows: Iterable, expected: str) -> Visibility:
@@ -65,14 +72,17 @@ def roi_visibility(roi_rect: Tuple[int, int, int, int], windows: Iterable, expec
     total = gh * gw
     seen = int(target.sum())
     if seen == 0:
-        where = f" · ROI 위치: {top_name}" if top_name else ""
-        return Visibility(False, f"대상 프로그램({expected}) 화면이 ROI 위치에 없음{where}", 100.0)
+        where = tr(" · ROI 위치: {name}", name=_shown(top_name)) if top_name else ""
+        return Visibility(False, tr("대상 프로그램({expected}) 화면이 ROI 위치에 없음", expected=expected) + where,
+                          100.0)
     if seen == total:
         return Visibility(True, "")
     covered_pct = (total - seen) * 100.0 / total
     names = sorted(covers, key=covers.get, reverse=True)
     if not names:
-        return Visibility(False, f"ROI 일부가 대상 프로그램 창 밖 ({covered_pct:.0f}%)", covered_pct)
-    who = ", ".join(names[:2]) + (" 외" if len(names) > 2 else "")
-    hint = " – 창을 ROI 밖으로 옮기세요" if OWN_LABEL in names[:2] else ""
-    return Visibility(False, f"다른 창이 ROI를 가림: {who} {covered_pct:.0f}%{hint}", covered_pct)
+        return Visibility(False, tr("ROI 일부가 대상 프로그램 창 밖 ({pct}%)", pct=f"{covered_pct:.0f}"),
+                          covered_pct)
+    who = ", ".join(_shown(n) for n in names[:2]) + (tr(" 외") if len(names) > 2 else "")
+    hint = tr(" – 창을 ROI 밖으로 옮기세요") if OWN_LABEL in names[:2] else ""
+    return Visibility(False, tr("다른 창이 ROI를 가림: {who} {pct}%", who=who, pct=f"{covered_pct:.0f}") + hint,
+                      covered_pct)

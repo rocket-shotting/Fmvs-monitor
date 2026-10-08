@@ -11,13 +11,14 @@ from typing import Callable, Dict, List, Optional, Tuple
 import detectors
 import notifier
 import winutil
+from i18n import tr
 
 _RED = "#c62828"
 _GREEN = "#2e7d32"
 _WIDTH = 480
 _MARGIN = 14              # ROI와 팝업 사이 최소 간격(px)
 _HISTORY = 6
-F = "맑은 고딕"
+F = "맑은 고딕"  # i18n: skip
 
 Rect = Tuple[int, int, int, int]
 
@@ -80,7 +81,7 @@ class AlertPopup:
         # 탐지 시각 (PC 로컬 시간) – 크게
         self._when_box = tk.Frame(inner, bg="#fff5f5", padx=12, pady=8)
         self._when_box.pack(fill="x")
-        self.when_caption = tk.Label(self._when_box, text="탐지 시각 (이 PC 시간)", bg="#fff5f5", fg="#7f1d1d",
+        self.when_caption = tk.Label(self._when_box, text=tr("탐지 시각 (이 PC 시간)"), bg="#fff5f5", fg="#7f1d1d",
                                      font=(F, 9, "bold"), anchor="w")
         self.when_caption.pack(anchor="w")
         self.when_label = tk.Label(self._when_box, text="", bg="#fff5f5", fg="#111111",
@@ -96,10 +97,10 @@ class AlertPopup:
 
         buttons = tk.Frame(inner, bg="white", pady=8)
         buttons.pack(fill="x")
-        tk.Button(buttons, text="확인", width=8, command=self.close).pack(side="right", padx=10)
-        self.snapshot_btn = tk.Button(buttons, text="스냅샷", width=7, command=self._open_snapshot)
+        tk.Button(buttons, text=tr("확인"), width=8, command=self.close).pack(side="right", padx=10)
+        self.snapshot_btn = tk.Button(buttons, text=tr("스냅샷"), width=7, command=self._open_snapshot)
         # 경보 화면을 바로 샘플로 등록 (실제 불량이면 NG, 오탐이면 OK, 셀 없음/이동 중이면 무시)
-        self.reg_labels = {"ng": "NG로 등록", "ok": "OK로 등록(오탐)", "skip": "무시로 등록(셀 없음)"}
+        self.reg_labels = {"ng": tr("NG로 등록"), "ok": tr("OK로 등록(오탐)"), "skip": tr("무시로 등록(셀 없음)")}
         self.reg_buttons = {cls: tk.Button(buttons, text=text, command=lambda c=cls: self._register(c))
                             for cls, text in self.reg_labels.items()}
         self._raw = None
@@ -124,25 +125,25 @@ class AlertPopup:
 
     def show(self, info: dict, recovered: bool):
         if recovered:
-            self._set_color(_GREEN, "#f0fdf4", "#14532d", "복구 시각 (이 PC 시간)")
-            self.title_label.configure(text=f"✅ 복구됨 – {info['roi_name']}")
-            lines = ["화면이 정상으로 돌아왔습니다.",
-                     f"현재 값: {info['detail']}"]
+            self._set_color(_GREEN, "#f0fdf4", "#14532d", tr("복구 시각 (이 PC 시간)"))
+            self.title_label.configure(text=tr("✅ 복구됨 – {name}", name=info["roi_name"]))
+            lines = [tr("화면이 정상으로 돌아왔습니다."),
+                     tr("현재 값: {value}", value=info["detail"])]
             if info.get("elapsed"):
-                lines.append(f"이상 지속 시간: {notifier.fmt_duration(info.get('elapsed'))}")
+                lines.append(tr("이상 지속 시간: {duration}", duration=notifier.fmt_duration(info.get("elapsed"))))
         else:
             self.count += 1
             self.history.appendleft(info["time"])
-            self._set_color(_RED, "#fff5f5", "#7f1d1d", "탐지 시각 (이 PC 시간)")
-            title = "🚨 이상 지속 (재알림)" if info["kind"] == "repeat" else "🚨 이상 탐지"
+            self._set_color(_RED, "#fff5f5", "#7f1d1d", tr("탐지 시각 (이 PC 시간)"))
+            title = tr("🚨 이상 지속 (재알림)") if info["kind"] == "repeat" else tr("🚨 이상 탐지")
             self.title_label.configure(text=f"{title} – {info['roi_name']}")
-            lines = [f"검출 유형: {info['detector']}",
-                     f"측정값: {info['detail']}",
-                     f"담당자: {info.get('assignee') or '미지정'}"]
+            lines = [tr("검출 유형: {detector}", detector=info["detector"]),
+                     tr("측정값: {value}", value=info["detail"]),
+                     tr("담당자: {assignee}", assignee=info.get("assignee") or tr("미지정"))]
             if info.get("elapsed"):
-                lines.insert(2, f"지속 시간: {notifier.fmt_duration(info.get('elapsed'))}")
+                lines.insert(2, tr("지속 시간: {duration}", duration=notifier.fmt_duration(info.get("elapsed"))))
             if info.get("consecutive", 1) > 1:
-                lines.insert(0, f"연속 NG {info['consecutive']}회")
+                lines.insert(0, tr("연속 NG {n}회", n=info["consecutive"]))
             snap = info.get("snapshot")
             if snap and os.path.exists(snap) and hasattr(os, "startfile"):
                 self._snapshot = snap
@@ -159,8 +160,8 @@ class AlertPopup:
         if not recovered:
             self.total = info.get("total_ng", self.count)
         if self.count:
-            head = f"이 ROI 누적 탐지 {getattr(self, 'total', self.count)}회"
-            self.history_label.configure(text=head + (" · 이전 탐지: " + ", ".join(t[-8:] for t in older)
+            head = tr("이 ROI 누적 탐지 {n}회", n=getattr(self, "total", self.count))
+            self.history_label.configure(text=head + (tr(" · 이전 탐지: {times}", times=", ".join(t[-8:] for t in older))
                                                       if older else ""))
         self.body.configure(text="\n".join(lines))
         self.win.deiconify()
@@ -173,10 +174,10 @@ class AlertPopup:
         error = self.manager.on_register(self.roi_id, cls, self._raw)
         btn = self.reg_buttons[cls]
         if error:
-            btn.configure(text="등록 실패")
+            btn.configure(text=tr("등록 실패"))
             self.body.configure(text=self.body.cget("text") + f"\n⚠ {error}")
         else:
-            btn.configure(text="등록됨 ✔", state="disabled")
+            btn.configure(text=tr("등록됨 ✔"), state="disabled")
 
     def _open_snapshot(self):
         if self._snapshot and os.path.exists(self._snapshot):

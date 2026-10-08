@@ -8,8 +8,9 @@ from PIL import Image, ImageTk
 
 from agent import FEED_KINDS, FeedItem
 from config import WALL_MAX, WALL_MIN
+from i18n import tr
 
-F = "맑은 고딕"
+F = "맑은 고딕"  # i18n: skip
 NUM_FONT = ("Segoe UI", 20, "bold")
 
 T = {
@@ -113,7 +114,7 @@ class CameraCard(tk.Frame):
         row.pack(fill="x", padx=8)
         self.name = tk.Label(row, text="", bg=T["card"], fg=T["text"], font=(F, 10, "bold"), anchor="w")
         self.name.pack(side="left", fill="x", expand=True)
-        self.pill = tk.Label(row, text="대기", bg=self.color, fg="#06101f", font=(F, 8, "bold"), padx=8)
+        self.pill = tk.Label(row, text=tr("대기"), bg=self.color, fg="#06101f", font=(F, 8, "bold"), padx=8)
         self.pill.pack(side="right")
         # 상세는 2줄 고정 – 상태 문구 길이에 따라 카드 높이가 바뀌어 옆 카드와 겹치지 않도록
         self.detail = tk.Label(self, text="", bg=T["card"], fg=T["muted"], font=(F, 8), anchor="nw",
@@ -149,7 +150,7 @@ class CameraCard(tk.Frame):
         self.color = STATE_COLORS.get(state, T["sky"])
         active = state not in ("idle", "off")
         self.configure(highlightbackground=self.color if active else T["border"])
-        self.pill.configure(text=STATE_SHORT.get(state, state), bg=self.color)
+        self.pill.configure(text=tr(STATE_SHORT.get(state, state)), bg=self.color)
         self.detail.configure(text=(detail[:110] + "…") if len(detail) > 110 else detail)
         self._hud()
 
@@ -239,7 +240,7 @@ class CameraWall(tk.Frame):
         self._width = 0
         self._drag: Optional[dict] = None
         self.empty = self.canvas.create_text(
-            0, 0, text="등록된 ROI가 없습니다\n상단의 [＋ ROI 추가]로 감시할 카메라 영역을 지정하세요",
+            0, 0, text=tr("등록된 ROI가 없습니다\n상단의 [＋ ROI 추가]로 감시할 카메라 영역을 지정하세요"),
             fill=T["muted"], font=(F, 11), justify="center", state="hidden")
 
     # ---------- 배치 ----------
@@ -317,11 +318,11 @@ class CameraWall(tk.Frame):
                 card.set_view_size(CameraCard.W, CameraCard.H)
             card.set_meta(r)
             if not r.enabled:
-                card.set_state("off", "사용 안 함")
+                card.set_state("off", tr("사용 안 함"))
             elif running:
-                card.set_state(*states.get(r.id, ("idle", "검사 준비 중")))
+                card.set_state(*states.get(r.id, ("idle", tr("검사 준비 중"))))
             else:
-                card.set_state("idle", "검출 대기 – ▶ 시작을 누르면 실시간 판정")
+                card.set_state("idle", tr("검출 대기 – ▶ 시작을 누르면 실시간 판정"))
             if not running and card.has_frame:
                 card.clear_frame()
         self.order = ids
@@ -443,7 +444,7 @@ class FeedPanel(tk.Frame):
         self.dot.pack(side="left")
         tk.Label(head, text=" AGENT ACTIVITY · SYSTEM LOG", bg=T["panel"], fg=T["text"],
                  font=("Segoe UI", 11, "bold")).pack(side="left")
-        tk.Label(head, text="에이전트 관찰·판단·실행·학습 + 시스템 기록", bg=T["panel"], fg=T["muted"],
+        tk.Label(head, text=tr("에이전트 관찰·판단·실행·학습 + 시스템 기록"), bg=T["panel"], fg=T["muted"],
                  font=(F, 8)).pack(side="right")
         body = tk.Frame(self, bg=T["panel"])
         body.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 10))
@@ -463,7 +464,7 @@ class FeedPanel(tk.Frame):
         t = self.text
         t.configure(state="normal")
         t.insert("end", datetime.fromtimestamp(item.when).strftime("%H:%M:%S "), "time")
-        t.insert("end", f"{icon} {name}  ", item.kind)
+        t.insert("end", f"{icon} {tr(name)}  ", item.kind)
         t.insert("end", item.text + "\n", "body")
         excess = int(t.index("end-1c").split(".")[0]) - self.MAX_LINES
         if excess > 0:
@@ -528,7 +529,7 @@ class RoiTrendPanel(tk.Canvas):
         if w < 120 or h < 80:
             return
         self.create_text(14, 16, anchor="w", text="ROI MONITORING", fill=T["text"], font=("Segoe UI", 11, "bold"))
-        self.create_text(w - 14, 16, anchor="e", text="ROI별 NG 추이 · 최근 12시간", fill=T["muted"], font=(F, 8))
+        self.create_text(w - 14, 16, anchor="e", text=tr("ROI별 NG 추이 · 최근 12시간"), fill=T["muted"], font=(F, 8))
         self.create_text(14 + 150 + 40, 38, anchor="e", text="NG", fill=T["muted"], font=(F, 8))
         if self.trends:
             hours = self.trends[0]["series"]
@@ -536,9 +537,9 @@ class RoiTrendPanel(tk.Canvas):
             slot = (bx1 - bx0) / max(1, len(hours))
             for j, (hour, _c) in enumerate(hours):
                 if j % 3 == 0:
-                    self.create_text(bx0 + slot * (j + 0.5), 38, text=f"{hour}시", fill=T["dim"], font=("Segoe UI", 7))
+                    self.create_text(bx0 + slot * (j + 0.5), 38, text=tr("{h}시", h=hour), fill=T["dim"], font=("Segoe UI", 7))
         else:
-            self.create_text(w // 2, h // 2, text="ROI를 추가하면 여기서 ROI별 NG 추이를 볼 수 있습니다",
+            self.create_text(w // 2, h // 2, text=tr("ROI를 추가하면 여기서 ROI별 NG 추이를 볼 수 있습니다"),
                              fill=T["muted"], font=(F, 9))
             return
         max_rows = max(1, (h - 48 - 18) // self.ROW_H)
@@ -546,7 +547,7 @@ class RoiTrendPanel(tk.Canvas):
             max_rows = len(self.trends)             # 다 들어가면 안내 문구 자리 없이 모두 표시
         n = draw_roi_rows(self, self.trends, 8, 48, w - 16, self.ROW_H, max_rows)
         if len(self.trends) > n:
-            self.create_text(w // 2, h - 8, text=f"외 {len(self.trends) - n}개 ROI (창을 키우면 더 보입니다)",
+            self.create_text(w // 2, h - 8, text=tr("외 {n}개 ROI (창을 키우면 더 보입니다)", n=len(self.trends) - n),
                              fill=T["dim"], font=(F, 8))
 
     def _click(self, e):
@@ -594,7 +595,7 @@ class MiniMonitor:
                               font=("Segoe UI", 10, "bold"), padx=8, pady=4)
         self.title.pack(side="left")
         FlatButton(head, "■", self.on_stop, kind="danger", padx=8, pady=2).pack(side="right", padx=(2, 4), pady=3)
-        FlatButton(head, "대시보드 열기", self.on_open, padx=8, pady=2, font=(F, 8, "bold")).pack(side="right", pady=3)
+        FlatButton(head, tr("대시보드 열기"), self.on_open, padx=8, pady=2, font=(F, 8, "bold")).pack(side="right", pady=3)
         self.clock = tk.Label(head, text="", bg=T["panel"], fg=T["text"], font=("Segoe UI", 9, "bold"))
         self.clock.pack(side="right", padx=6)
         for w in (head, self.title, self.clock):
@@ -671,14 +672,14 @@ class MiniMonitor:
         h = self._height()
         c.configure(height=h)
         text, color = self.status
-        c.create_text(10, 14, anchor="w", text=text or "● 실시간 감시 중", fill=color, font=(F, 9, "bold"))
-        c.create_text(self.WIDTH - 10, 14, anchor="e", text="NG · 최근 12시간", fill=T["muted"], font=(F, 8))
+        c.create_text(10, 14, anchor="w", text=text or tr("● 실시간 감시 중"), fill=color, font=(F, 9, "bold"))
+        c.create_text(self.WIDTH - 10, 14, anchor="e", text=tr("NG · 최근 12시간"), fill=T["muted"], font=(F, 8))
         if not self.trends:
-            c.create_text(self.WIDTH // 2, 48, text="감시 중인 ROI 없음", fill=T["muted"], font=(F, 9))
+            c.create_text(self.WIDTH // 2, 48, text=tr("감시 중인 ROI 없음"), fill=T["muted"], font=(F, 9))
             return
         n = draw_roi_rows(c, self.trends, 4, 30, self.WIDTH - 8, self.ROW_H, self.MAX_ROWS, compact=True)
         if len(self.trends) > n:
-            c.create_text(self.WIDTH // 2, 30 + n * self.ROW_H + 8, text=f"외 {len(self.trends) - n}개 ROI",
+            c.create_text(self.WIDTH // 2, 30 + n * self.ROW_H + 8, text=tr("외 {n}개 ROI", n=len(self.trends) - n),
                           fill=T["dim"], font=(F, 8))
 
     def destroy(self):
@@ -704,8 +705,8 @@ class TrendChart(tk.Canvas):
             return
         total = sum(c for _h, c in self.series)
         self.create_text(14, 14, anchor="w", text="NG TREND", fill=T["text"], font=("Segoe UI", 11, "bold"))
-        self.create_text(100, 14, anchor="w", text="시간대별 NG (최근 12시간)", fill=T["muted"], font=(F, 8))
-        self.create_text(w - 14, 14, anchor="e", text=f"합계 {total}건", fill=T["red"] if total else T["muted"],
+        self.create_text(100, 14, anchor="w", text=tr("시간대별 NG (최근 12시간)"), fill=T["muted"], font=(F, 8))
+        self.create_text(w - 14, 14, anchor="e", text=tr("합계 {n}건", n=total), fill=T["red"] if total else T["muted"],
                          font=(F, 9, "bold"))
         x0, y0, x1, y1 = 16, 36, w - 16, h - 22
         n = max(1, len(self.series))

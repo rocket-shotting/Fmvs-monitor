@@ -11,12 +11,13 @@ from typing import Dict, Optional
 
 import ui_util
 import winutil
+from i18n import tr
 
 _KEY = "#010203"          # 투명 처리할 색
 _GAP = 3                  # ROI와 테두리 사이 간격(px) – ROI 픽셀을 덮지 않음
 _BORDER = 3
-_FONT = ("맑은 고딕", 9, "bold")
-_BADGE_FONT = ("맑은 고딕", 10, "bold")
+_FONT = ("맑은 고딕", 9, "bold")  # i18n: skip
+_BADGE_FONT = ("맑은 고딕", 10, "bold")  # i18n: skip
 
 STATE_STYLE = {          # 상태: (테두리 색, 표시 글자)
     "ok": ("#2e7d32", "정상"),
@@ -126,7 +127,7 @@ class ScreenOverlay:
     def _set_label(self, roi_id: str, state: str):
         it = self.items[roi_id]
         color, label = STATE_STYLE.get(state, STATE_STYLE["idle"])
-        self.canvas.itemconfigure(it["text"], text=f" {it['name']} · {label} ")
+        self.canvas.itemconfigure(it["text"], text=f" {it['name']} · {tr(label)} ")
         x0, y0, x1, y1 = self.canvas.bbox(it["text"])
         self.canvas.coords(it["bg"], x0 - 2, y0, x1 + 2, y1)
         self.canvas.itemconfigure(it["bg"], fill=color, outline=color)
@@ -156,7 +157,7 @@ class ScreenOverlay:
         self.badge_bg = self.canvas.create_rectangle(x - ox, y - oy, x - ox + w, y - oy + h,
                                                      fill="#1b5e20", outline="#ffffff", width=1)
         self.badge_text = self.canvas.create_text(x - ox + 10, y - oy + h // 2, anchor="w",
-                                                  fill="white", font=_BADGE_FONT, text="FMVS 검출 시작 중…")
+                                                  fill="white", font=_BADGE_FONT, text=tr("FMVS 검출 시작 중…"))
 
     def heartbeat(self, ok: bool, roi_count: int, alarm_count: int):
         """0.5초마다 호출: 배지 갱신 + 경보 ROI 깜빡임."""
@@ -171,10 +172,10 @@ class ScreenOverlay:
         dot = "●" if self._blink else "○"
         now = f"{datetime.now():%H:%M:%S}"
         if not ok:
-            text, fill = f"⚠ FMVS 검출기 응답 없음 · {now}", "#b71c1c"
+            text, fill = tr("⚠ FMVS 검출기 응답 없음 · {time}", time=now), "#b71c1c"
         elif alarm_count:
-            text, fill = f"{dot} FMVS 검출 중 · 경보 {alarm_count}건 · {now}", "#c62828"
+            text, fill = tr("{dot} FMVS 검출 중 · 경보 {n}건 · {time}", dot=dot, n=alarm_count, time=now), "#c62828"
         else:
-            text, fill = f"{dot} FMVS 검출 중 · ROI {roi_count}개 · {now}", "#1b5e20"
+            text, fill = tr("{dot} FMVS 검출 중 · ROI {n}개 · {time}", dot=dot, n=roi_count, time=now), "#1b5e20"
         self.canvas.itemconfigure(self.badge_text, text=text)
         self.canvas.itemconfigure(self.badge_bg, fill=fill)

@@ -11,6 +11,7 @@ from typing import List, Optional
 
 import detectors
 import paths
+from i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def new_roi_id() -> str:
 @dataclass
 class ROI:
     id: str = field(default_factory=new_roi_id)
-    name: str = "새 ROI"
+    name: str = field(default_factory=lambda: tr("새 ROI"))
     enabled: bool = True
     x: int = 0
     y: int = 0
@@ -55,7 +56,7 @@ class ROI:
                            self.still_frames], sort_keys=True)
 
     def detector_label(self) -> str:
-        return detectors.DETECTORS.get(self.detector, {}).get("label", self.detector)
+        return tr(detectors.DETECTORS.get(self.detector, {}).get("label", self.detector))
 
 
 @dataclass
@@ -78,6 +79,8 @@ class AppConfig:
     retention_days: int = 15           # 로그·스냅샷·리포트 보관 기간(일), 최대 15일
     mini_monitor: bool = True          # 검출 시작 시 화면 하단에 ROI 트렌드 미니 모니터 표시
     mini_position: str = "auto"        # auto | right | left (하단 오른쪽/왼쪽)
+    snapshot_scale: int = 3            # NG 스냅샷 확대 배율 (보기용, 1~4) – 원본은 ROI 크기로 따로 저장
+    language: str = "ko"               # 화면 언어: ko | en
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)
 
@@ -166,6 +169,9 @@ def config_from_dict(d: dict) -> AppConfig:
     cfg.mini_monitor = bool(d.get("mini_monitor", True))
     pos = str(d.get("mini_position") or "auto")
     cfg.mini_position = pos if pos in ("auto", "right", "left") else "auto"
+    cfg.snapshot_scale = max(1, min(4, _to_int(d.get("snapshot_scale"), 3)))
+    lang = str(d.get("language") or "ko")
+    cfg.language = lang if lang in ("ko", "en") else "ko"
     cfg.pc_label = str(d.get("pc_label") or socket.gethostname())
     seen = set()
     for item in d.get("rois") or []:

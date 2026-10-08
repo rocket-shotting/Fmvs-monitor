@@ -25,9 +25,12 @@ jobs:
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
+      - name: Translation check (한국어/영어 누락 검사)
+        run: python tests/check_i18n.py
+
       - name: Import check (Windows modules + tkinter GUI)
         working-directory: nvr_inspector
-        run: python -c "import winutil, capture, gui, roi_dialog, roi_editor, settings_dialog, alert; print('imports ok')"
+        run: python -c "import i18n; i18n.set_language('en'); import winutil, capture, gui, roi_dialog, roi_editor, settings_dialog, alert; print('imports ok')"
 
       - name: Set screen resolution (실제 모니터 크기로 미리보기)
         continue-on-error: true

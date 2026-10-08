@@ -214,6 +214,9 @@ def main():
     assert app.tree.set(roi.id, "state") == gui.STATE_TEXT["moving"]
     app.monitor = None
 
+    # ---- 화면 언어 전환: 영어로 모든 창을 열어 보고 다시 한국어로 ----
+    language_check(app, roi)
+
     # ---- 카메라 월: 카드 끌어서 이동 / 크기 조절 / 자동 정렬 ----
     wall_drag_check(app, roi)
 
@@ -513,6 +516,70 @@ def capture_previews(app, out):
     app.alerts.close_all()
     app.mini.hide()
     root.deiconify()
+
+    # 영어 화면 미리보기
+    app.set_language("en")
+    root.state("normal")
+    root.geometry("1920x1040+0+0" if sw >= 1920 else f"{sw}x{sh - 40}+0+0")
+    for _ in range(6):
+        root.update()
+        _time.sleep(0.15)
+    app._place_sash()
+    app.trend.draw(app.agent.hourly_series(12))
+    for _ in range(4):
+        root.update()
+        _time.sleep(0.1)
+    check_layout(app)
+    root.attributes("-topmost", True)
+    root.update()
+    with Grabber() as g:
+        shot = g.grab(root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height())
+    Image.fromarray(shot).save(os.path.join(out, "dashboard_en.png"))
+    root.attributes("-topmost", False)
+    print("영어 대시보드 캡처 완료")
+    app.set_language("ko")
+
+
+def language_check(app, roi):
+    import re
+    import i18n
+    root = app.root
+    hangul = re.compile("[가-힣]")
+    app.log("info", "언어 전환 전 기록")
+    app.set_language("en")
+    root.update()
+    assert i18n.language() == "en" and app.cfg.language == "en"
+    heads = [app.tree.heading(c[0])["text"] for c in gui.COLUMNS]
+    assert not any(hangul.search(h) for h in heads), heads
+    assert not hangul.search(app.status_pill.cget("text")), app.status_pill.cget("text")
+    assert "언어 전환 전 기록" in app.feed.text.get("1.0", "end"), "언어 전환 후 이전 기록이 사라짐"
+    # 영어로 모든 창 열기 (오류 없이 열리고 주요 글자가 영어인지)
+    dlg = roi_dialog.RoiDialog(root, roi, "ROI")
+    for kind in detectors.DETECTOR_ORDER:
+        dlg.v_kind.set(i18n.tr(detectors.DETECTORS[kind]["label"]))
+        dlg._on_kind_changed()
+        assert dlg._collect().detector == kind
+    root.update()
+    dlg.top.destroy()
+    sd = samples_dialog.SamplesDialog(root, roi)
+    root.update()
+    assert not hangul.search(sd.top.title().replace(roi.name, "")), sd.top.title()
+    sd.top.destroy()
+    st = settings_dialog.SettingsDialog(root, app.cfg)
+    root.update()
+    st.top.destroy()
+    info = {"kind": "alert", "roi_id": roi.id, "roi_name": roi.name, "detector": roi.detector_label(),
+            "detail": "x", "elapsed": None, "assignee": "", "assignee_email": "", "time": "2026-01-01 00:00:00",
+            "snapshot": None, "raw_snapshot": None, "roi_detector": roi.detector, "consecutive": 2}
+    app.alerts.alert(info)
+    root.update()
+    popup = app.alerts.popups[roi.id]
+    assert not hangul.search(popup.title_label.cget("text").replace(roi.name, "")), popup.title_label.cget("text")
+    app.alerts.close_all()
+    app.set_language("ko")
+    root.update()
+    assert app.tree.heading("name")["text"] == "이름" and i18n.language() == "ko"
+    print("한국어 ↔ English 전환 확인")
 
 
 if __name__ == "__main__":

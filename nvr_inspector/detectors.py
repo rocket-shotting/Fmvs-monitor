@@ -4,6 +4,8 @@ from typing import Optional
 
 import numpy as np
 
+from i18n import tr
+
 # 각 검출 유형: 표시 이름, 설명, 파라미터 목록 (키, 라벨, 타입, 기본값, 최소, 최대)
 DETECTORS = {
     "black": {
@@ -174,10 +176,10 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
     else:
         refs = [r for r in reference if r is not None]
     if kind not in DETECTORS:
-        return Result(None, 0.0, f"알 수 없는 검출 유형: {kind}")
+        return Result(None, 0.0, tr("알 수 없는 검출 유형: {kind}", kind=kind))
     p = normalize_params(kind, params)
     if rgb.size == 0:
-        return Result(None, 0.0, "캡처 영역이 비어 있음")
+        return Result(None, 0.0, tr("캡처 영역이 비어 있음"))
     if samples is None:
         samples = {"ok": refs}
     if kind == "match":
@@ -187,27 +189,29 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
     if kind == "black":
         ratio = float((to_gray(small) <= p["threshold"]).mean())
         return Result(ratio >= p["ratio"], ratio * 100,
-                      f"어두운 픽셀 {ratio * 100:.1f}% (기준 ≥{p['ratio'] * 100:.0f}%)")
+                      tr("어두운 픽셀 {pct}% (기준 ≥{ref}%)",
+                         pct=f"{ratio * 100:.1f}", ref=f"{p['ratio'] * 100:.0f}"))
 
     if kind == "white":
         ratio = float((to_gray(small) >= p["threshold"]).mean())
         return Result(ratio >= p["ratio"], ratio * 100,
-                      f"밝은 픽셀 {ratio * 100:.1f}% (기준 ≥{p['ratio'] * 100:.0f}%)")
+                      tr("밝은 픽셀 {pct}% (기준 ≥{ref}%)",
+                         pct=f"{ratio * 100:.1f}", ref=f"{p['ratio'] * 100:.0f}"))
 
     if kind == "uniform":
         std = float(to_gray(small).std())
         return Result(std <= p["max_std"], std,
-                      f"밝기 표준편차 {std:.1f} (기준 ≤{p['max_std']:.1f})")
+                      tr("밝기 표준편차 {std} (기준 ≤{ref})", std=f"{std:.1f}", ref=f"{p['max_std']:.1f}"))
 
     if kind == "frozen":
         gray = to_gray(small)
         prev = state.get("prev")
         state["prev"] = gray
         if prev is None or prev.shape != gray.shape:
-            return Result(None, 0.0, "비교할 이전 프레임 수집 중")
+            return Result(None, 0.0, tr("비교할 이전 프레임 수집 중"))
         diff = float(np.abs(gray - prev).mean())
         return Result(diff <= p["max_diff"], diff,
-                      f"프레임 변화량 {diff:.2f} (기준 ≤{p['max_diff']:.2f})")
+                      tr("프레임 변화량 {diff} (기준 ≤{ref})", diff=f"{diff:.2f}", ref=f"{p['max_diff']:.2f}"))
 
     if kind == "color":
         target = np.array(p["rgb"], dtype=np.int16)
@@ -215,20 +219,22 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
         ratio = float((dist <= p["tolerance"]).mean())
         r, g, b = p["rgb"]
         return Result(ratio >= p["ratio"], ratio * 100,
-                      f"색상({r},{g},{b}) 픽셀 {ratio * 100:.1f}% (기준 ≥{p['ratio'] * 100:.0f}%)")
+                      tr("색상({r},{g},{b}) 픽셀 {pct}% (기준 ≥{ref}%)", r=r, g=g, b=b,
+                         pct=f"{ratio * 100:.1f}", ref=f"{p['ratio'] * 100:.0f}"))
 
     if not refs:
-        return Result(None, 0.0, "기준(OK) 이미지 없음 – [샘플/기준 이미지]에서 정상품을 등록하세요")
+        return Result(None, 0.0, tr("기준(OK) 이미지 없음 – [샘플/기준 이미지]에서 정상품을 등록하세요"))
     same = lambda arrs: [a for a in arrs if a is not None and a.shape[:2] == rgb.shape[:2]]  # noqa: E731
     refs, ngs, skips = same(refs), same(samples.get("ng", [])), same(samples.get("skip", []))
     if not refs:
-        return Result(None, 0.0, "ROI 크기가 바뀜 – 샘플/기준 이미지를 다시 등록하세요")
+        return Result(None, 0.0, tr("ROI 크기가 바뀜 – 샘플/기준 이미지를 다시 등록하세요"))
 
     # 무시(제품 없음·이동 중) 샘플과 가장 비슷하면 판정하지 않는다
     if skips:
         near = nearest_appearance(rgb, {"ok": refs, "ng": ngs, "skip": skips}, state, 20.0)
         if near["skip"] < min(near["ok"], near.get("ng", float("inf"))):
-            return Result(None, near["ok"], f"제품 없음 – 무시 샘플과 가장 비슷 (판정 보류 · 무시 {near['skip']:.2f} / OK {near['ok']:.2f})")
+            return Result(None, near["ok"], tr("제품 없음 – 무시 샘플과 가장 비슷 (판정 보류 · 무시 {skip} / OK {ok})",
+                                                 skip=f"{near['skip']:.2f}", ok=f"{near['ok']:.2f}"))
 
     if kind == "shape":
         return _evaluate_shape(p, rgb, refs, ngs)
@@ -239,10 +245,11 @@ def evaluate(kind: str, params: dict, rgb: np.ndarray, state: dict,
     if ngs:
         diff_ng = min(float(np.abs(cur - block_mean(to_gray(r))).mean()) for r in ngs)
         if diff_ng < diff:
-            return Result(True, diff, f"NG 샘플과 가장 비슷 (NG 차이 {diff_ng:.1f} < OK 차이 {diff:.1f})")
-    suffix = f" · 기준 {len(refs)}장 중 최소" if len(refs) > 1 else ""
+            return Result(True, diff, tr("NG 샘플과 가장 비슷 (NG 차이 {ng} < OK 차이 {ok})",
+                                           ng=f"{diff_ng:.1f}", ok=f"{diff:.1f}"))
+    suffix = tr(" · 기준 {n}장 중 최소", n=len(refs)) if len(refs) > 1 else ""
     return Result(diff >= p["max_diff"], diff,
-                  f"기준 대비 차이 {diff:.1f} (기준 ≥{p['max_diff']:.1f}){suffix}")
+                  tr("기준 대비 차이 {diff} (기준 ≥{ref})", diff=f"{diff:.1f}", ref=f"{p['max_diff']:.1f}") + suffix)
 
 
 # ===================== 형상 검사 =====================
@@ -359,7 +366,7 @@ def compare_shape(cur_gray: np.ndarray, ref_gray: np.ndarray, p: dict):
     ref_area = int(np.count_nonzero(ref_m))
     if (ref_contrast < _MIN_CONTRAST or ref_area < 0.002 * ref_m.size
             or ref_area > 0.998 * ref_m.size):
-        return "기준 이미지에서 대상 형상을 구분할 수 없음 – ROI를 탭 주변으로 좁히거나 '대상(탭) 밝기'를 지정하세요"
+        return tr("기준 이미지에서 대상 형상을 구분할 수 없음 – ROI를 탭 주변으로 좁히거나 '대상(탭) 밝기'를 지정하세요")
     cur_m, cur_contrast = object_mask(cur, polarity)
     if cur_contrast < ref_contrast * _PRESENCE_CONTRAST:
         cur_m = np.zeros(cur.shape, dtype=bool)   # 배경 노이즈만 있음 → 대상 없음
@@ -415,7 +422,8 @@ def _evaluate_shape(p: dict, rgb: np.ndarray, refs, ngs=()) -> Result:
     min_presence = max(p["min_presence"], _NO_OBJECT_PCT)
     if best["presence"] < min_presence:
         return Result(None, best["presence"],
-                      f"제품 없음 (대상 면적 {best['presence']:.0f}% < {min_presence:.0f}%) – 판정 보류")
+                      tr("제품 없음 (대상 면적 {pct}% < {min}%) – 판정 보류",
+                         pct=f"{best['presence']:.0f}", min=f"{min_presence:.0f}"))
 
     # NG 샘플과 형상이 더 비슷하면 불량 (등록한 불량 유형과 일치)
     best_ng = None
@@ -426,15 +434,16 @@ def _evaluate_shape(p: dict, rgb: np.ndarray, refs, ngs=()) -> Result:
     if best_ng is not None and best_ng["defect"] < best["defect"] and best_ng["defect"] < p["max_defect"]:
         mask = _upscale_mask(best["map"], best["factor"], rgb.shape) if best["map"].any() else None
         return Result(True, best["defect"],
-                      f"NG 샘플과 형상 일치 (NG 차이 {best_ng['defect']:.1f}% < OK 차이 {best['defect']:.1f}%)", mask)
+                      tr("NG 샘플과 형상 일치 (NG 차이 {ng}% < OK 차이 {ok}%)",
+                         ng=f"{best_ng['defect']:.1f}", ok=f"{best['defect']:.1f}"), mask)
 
-    parts = [f"형상 차이 {best['defect']:.1f}% (기준 ≥{p['max_defect']:g}%)"]
+    parts = [tr("형상 차이 {pct}% (기준 ≥{ref}%)", pct=f"{best['defect']:.1f}", ref=f"{p['max_defect']:g}")]
     if p["max_texture"] > 0:
-        parts.append(f"표면 차이 {best['texture']:.2f} (기준 ≥{p['max_texture']:g})")
+        parts.append(tr("표면 차이 {tex} (기준 ≥{ref})", tex=f"{best['texture']:.2f}", ref=f"{p['max_texture']:g}"))
     if best["dx"] or best["dy"]:
-        parts.append(f"위치 보정 {best['dx']:+d},{best['dy']:+d}px")
+        parts.append(tr("위치 보정 {dx},{dy}px", dx=f"{best['dx']:+d}", dy=f"{best['dy']:+d}"))
     if len(refs) > 1:
-        parts.append(f"기준 {len(refs)}장 중 최근접")
+        parts.append(tr("기준 {n}장 중 최근접", n=len(refs)))
     abnormal = best["ratio"] >= 1.0
     mask = _upscale_mask(best["map"], best["factor"], rgb.shape) if abnormal else None
     return Result(abnormal, best["defect"], " · ".join(parts), mask)
@@ -546,14 +555,16 @@ def calibrate(prepared: dict, max_shift_pct: float) -> dict:
     else:
         threshold = _DEFAULT_OK_DISTANCE
     if ok_max is None:
-        quality = "OK 샘플이 1장이라 자동 기준이 부정확합니다 – OK 샘플을 3장 이상 등록하세요"
+        quality = tr("OK 샘플이 1장이라 자동 기준이 부정확합니다 – OK 샘플을 3장 이상 등록하세요")
     elif ng_min is None:
-        quality = f"OK 편차 최대 {ok_max:.2f} – NG 샘플을 등록하면 더 정확해집니다"
+        quality = tr("OK 편차 최대 {ok_max} – NG 샘플을 등록하면 더 정확해집니다", ok_max=f"{ok_max:.2f}")
     elif ok_max < ng_min:
-        quality = f"분리 양호: OK 편차 최대 {ok_max:.2f} < NG 거리 최소 {ng_min:.2f}"
+        quality = tr("분리 양호: OK 편차 최대 {ok_max} < NG 거리 최소 {ng_min}",
+                     ok_max=f"{ok_max:.2f}", ng_min=f"{ng_min:.2f}")
     else:
-        quality = (f"⚠ OK/NG가 겹침: OK 편차 최대 {ok_max:.2f} ≥ NG 거리 최소 {ng_min:.2f} – "
-                   "ROI를 대상에 맞게 좁히거나 샘플을 추가하세요")
+        quality = tr("⚠ OK/NG가 겹침: OK 편차 최대 {ok_max} ≥ NG 거리 최소 {ng_min} – "
+                     "ROI를 대상에 맞게 좁히거나 샘플을 추가하세요",
+                     ok_max=f"{ok_max:.2f}", ng_min=f"{ng_min:.2f}")
     return {"threshold": threshold, "ok_max": ok_max, "ng_min": ng_min, "quality": quality,
             "counts": {c: len(prepared.get(c, [])) for c in SAMPLE_CLASSES}}
 
@@ -569,10 +580,10 @@ def _diff_mask(cur: _Spectra, ref: _Spectra, dy: int, dx: int, shape) -> np.ndar
 def _evaluate_match(p: dict, rgb: np.ndarray, samples: dict, state: dict) -> Result:
     shape = rgb.shape[:2]
     if not samples.get("ok"):
-        return Result(None, 0.0, "OK 샘플 이미지 없음 – [샘플 이미지]에서 OK 이미지를 등록하세요")
+        return Result(None, 0.0, tr("OK 샘플 이미지 없음 – [샘플 이미지]에서 OK 이미지를 등록하세요"))
     prepared, calib = _prepare_samples(samples, shape, state, p["max_shift"])
     if not prepared["ok"]:
-        return Result(None, 0.0, "ROI 크기가 바뀜 – 샘플 이미지를 다시 등록하세요")
+        return Result(None, 0.0, tr("ROI 크기가 바뀜 – 샘플 이미지를 다시 등록하세요"))
     g = _match_gray(rgb)
     cur = _Spectra(g, _fft_shape(g.shape))
 
@@ -587,19 +598,21 @@ def _evaluate_match(p: dict, rgb: np.ndarray, samples: dict, state: dict) -> Res
     d_ng = best.get("ng", (float("inf"),))[0]
     d_skip = best.get("skip", (float("inf"),))[0]
     dist = f"OK {d_ok:.2f}" + (f" · NG {d_ng:.2f}" if "ng" in best else "") + \
-           (f" · 무시 {d_skip:.2f}" if "skip" in best else "")
-    auto = "자동" if p["ok_threshold"] <= 0 else "수동"
+           (tr(" · 무시 {d}", d=f"{d_skip:.2f}") if "skip" in best else "")
+    auto = tr("자동") if p["ok_threshold"] <= 0 else tr("수동")
 
     if d_skip < min(d_ok, d_ng):
-        return Result(None, d_ok, f"무시 샘플과 가장 비슷 – 판정 보류 ({dist})")
+        return Result(None, d_ok, tr("무시 샘플과 가장 비슷 – 판정 보류 ({dist})", dist=dist))
     if d_ng < d_ok:
-        return Result(True, d_ok, f"NG 샘플과 가장 비슷 ({dist})",
+        return Result(True, d_ok, tr("NG 샘플과 가장 비슷 ({dist})", dist=dist),
                       _diff_mask(cur, best["ok"][3], best["ok"][1], best["ok"][2], rgb.shape))
     if d_ok > threshold:
         _d, dy, dx, spec = best["ok"]
-        return Result(True, d_ok, f"OK와 다름: 거리 {d_ok:.2f} > 허용 {threshold:.2f}({auto}) ({dist})",
+        return Result(True, d_ok, tr("OK와 다름: 거리 {d} > 허용 {th}({auto}) ({dist})",
+                                     d=f"{d_ok:.2f}", th=f"{threshold:.2f}", auto=auto, dist=dist),
                       _diff_mask(cur, spec, dy, dx, rgb.shape))
-    return Result(False, d_ok, f"OK와 일치: 거리 {d_ok:.2f} ≤ 허용 {threshold:.2f}({auto}) ({dist})")
+    return Result(False, d_ok, tr("OK와 일치: 거리 {d} ≤ 허용 {th}({auto}) ({dist})",
+                                  d=f"{d_ok:.2f}", th=f"{threshold:.2f}", auto=auto, dist=dist))
 
 
 def match_calibration(samples: dict, shape, max_shift_pct: float) -> dict:
@@ -670,14 +683,15 @@ def self_check(kind: str, params: dict, samples: dict) -> dict:
     for cls, (wrong, tested) in result.items():
         if tested:
             name, bad = labels[cls]
-            parts.append(f"{name} {tested - wrong}/{tested} 맞춤" + (f" ({bad} {wrong})" if wrong else ""))
+            parts.append(tr("{name} {ok}/{n} 맞춤", name=tr(name), ok=tested - wrong, n=tested)
+                         + (f" ({tr(bad)} {wrong})" if wrong else ""))
     good = all(w == 0 for w, t in result.values())
     if not parts:
-        summary = "자체 검증: OK 샘플을 2장 이상 등록하면 판정 정확도를 스스로 검증합니다"
+        summary = tr("자체 검증: OK 샘플을 2장 이상 등록하면 판정 정확도를 스스로 검증합니다")
     else:
-        summary = ("✔ 자체 검증 통과: " if good else "⚠ 자체 검증: ") + " · ".join(parts)
+        summary = (tr("✔ 자체 검증 통과: ") if good else tr("⚠ 자체 검증: ")) + " · ".join(parts)
         if not good:
-            summary += " – 샘플을 추가하거나 기준값을 조정하세요"
+            summary += tr(" – 샘플을 추가하거나 기준값을 조정하세요")
     result["summary"] = summary
     result["passed"] = good and bool(parts)
     return result

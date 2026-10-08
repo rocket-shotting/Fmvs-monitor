@@ -22,25 +22,37 @@ def setup_logging() -> None:
     root.addHandler(handler)
 
     def excepthook(exc_type, exc, tb):
-        logging.getLogger("main").critical("처리되지 않은 예외", exc_info=(exc_type, exc, tb))
+        logging.getLogger("main").critical("처리되지 않은 예외", exc_info=(exc_type, exc, tb))  # i18n: skip
     sys.excepthook = excepthook
+
+
+def apply_saved_language() -> None:
+    """저장된 화면 언어를 GUI 생성 전에 적용 (중복 실행 안내 등 초기 메시지용)."""
+    try:
+        import config
+        import i18n
+        i18n.set_language(config.load().language)
+    except Exception:
+        logging.getLogger("main").warning("화면 언어 설정을 읽지 못함", exc_info=True)  # i18n: skip
 
 
 def main() -> int:
     winutil.enable_dpi_awareness()   # Tk 창 생성 전에 호출해야 좌표가 정확함
     setup_logging()
+    apply_saved_language()
     if not winutil.acquire_single_instance():
         import tkinter as tk
         from tkinter import messagebox
         r = tk.Tk()
         r.withdraw()
-        messagebox.showwarning("FMVS Vision Agent", "이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인하세요.")
+        from i18n import tr
+        messagebox.showwarning("FMVS Vision Agent", tr("이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인하세요."))
         r.destroy()
         return 1
-    logging.getLogger("main").info("프로그램 시작 (경로: %s)", paths.BASE_DIR)
+    logging.getLogger("main").info("프로그램 시작 (경로: %s)", paths.BASE_DIR)  # i18n: skip
     from gui import App
     App().run()
-    logging.getLogger("main").info("프로그램 종료")
+    logging.getLogger("main").info("프로그램 종료")  # i18n: skip
     return 0
 
 

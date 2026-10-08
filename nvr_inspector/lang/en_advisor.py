@@ -6,7 +6,7 @@ EN = {
     "  💡 의견  ": "  💡 Advisor  ",
     "  💡 의견 {n}  ": "  💡 Advisor {n}  ",
     "⟳ 다시 분석": "⟳ Re-analyze",
-    "🤖 LLM 종합 의견": "🤖 LLM summary",
+    "✦ LLM 종합 의견": "✦ LLM summary",
     "묻기": "Ask",
     "마지막 분석 {when} · 검출 기록·샘플·설정 기반": "Last analysis {when} · based on detection history, samples and settings",
     "규칙 분석 + LLM ({model})": "Rule analysis + LLM ({model})",
@@ -14,7 +14,7 @@ EN = {
     "✔ 지금은 개선 의견이 없습니다": "✔ No recommendations right now",
     "검출 기록·샘플·설정에서 문제를 찾지 못했습니다. 5분마다 다시 분석합니다.":
         "No issues found in detection history, samples or settings. Re-analyzing every 5 minutes.",
-    "🤖 LLM 연결 시 (예시)": "🤖 With an LLM connected (example)",
+    "✦ LLM 연결 시 (예시)": "✦ With an LLM connected (example)",
     "설정 → LLM 연결에서 이 PC 또는 사내 서버의 LLM(Ollama·LM Studio 등)을 켜면 위 같은 종합 의견과 질문 답변을 받을 수 있습니다. 화면·이미지는 보내지 않습니다.":
         "Enable an LLM on this PC or an in-house server (Ollama, LM Studio, etc.) in Settings → LLM connection to get "
         "summaries and answers like the above. Screens and images are never sent.",

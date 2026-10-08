@@ -502,7 +502,7 @@ class AdvisorPanel(tk.Frame):
         self.mode = tk.Label(head, text="", bg=T["panel"], fg=T["muted"], font=(F, 8))
         self.mode.pack(side="left", padx=8)
         FlatButton(head, tr("⟳ 다시 분석"), on_refresh, padx=8, pady=2).pack(side="right")
-        self.btn_summary = FlatButton(head, tr("🤖 LLM 종합 의견"), on_summary, padx=8, pady=2)
+        self.btn_summary = FlatButton(head, tr("✦ LLM 종합 의견"), on_summary, padx=8, pady=2)
         self.btn_summary.pack(side="right", padx=(0, 6))
         self.when = tk.Label(self, text="", bg=T["panel"], fg=T["dim"], font=(F, 8), anchor="w")
         self.when.pack(fill="x", padx=12)
@@ -574,7 +574,7 @@ class AdvisorPanel(tk.Frame):
             self.mode.configure(text=tr("규칙 분석 · LLM 미연결"), fg=T["muted"])
         self.btn_summary.set_enabled(self.llm_label is not None)
         for q, text, error in self.answers:
-            self._card("llm", ("⚠ " if error else "🤖 ") + (q if len(q) <= 60 else q[:60] + "…"), text)
+            self._card("llm", ("⚠ " if error else "✦ ") + (q if len(q) <= 60 else q[:60] + "…"), text)
         shown = [a for a in self.items if a.key not in self.hidden]
         for a in shown:
             self._card(a.level, a.title, a.body, a)
@@ -582,7 +582,7 @@ class AdvisorPanel(tk.Frame):
             self._card("info", tr("✔ 지금은 개선 의견이 없습니다"),
                        tr("검출 기록·샘플·설정에서 문제를 찾지 못했습니다. 5분마다 다시 분석합니다."))
         if self.llm_label is None and not self.answers:
-            self._card("example", tr("🤖 LLM 연결 시 (예시)"),
+            self._card("example", tr("✦ LLM 연결 시 (예시)"),
                        llm.example_answer() + "\n\n" +
                        tr("설정 → LLM 연결에서 이 PC 또는 사내 서버의 LLM(Ollama·LM Studio 등)을 켜면 "
                           "위 같은 종합 의견과 질문 답변을 받을 수 있습니다. 화면·이미지는 보내지 않습니다."))

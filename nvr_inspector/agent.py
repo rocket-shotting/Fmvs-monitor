@@ -73,6 +73,7 @@ class RoiStats:
     last_state: str = "idle"
     last_detail: str = ""
     ng_times: Deque[float] = field(default_factory=lambda: deque(maxlen=200))
+    state_counts: Counter = field(default_factory=Counter)   # 상태별 보고 횟수 (의견 에이전트 분석용)
 
 
 class VisionAgent:
@@ -143,6 +144,7 @@ class VisionAgent:
     # ---------------- 관찰 ----------------
     def on_status(self, roi_id: str, state: str, detail: str) -> None:
         st = self.stats[roi_id]
+        st.state_counts[state] += 1
         changed = (state, detail) != (st.last_state, st.last_detail)
         judged_on_stop = bool(_STOP_STAMP.match(detail))
         # 판정 수: 연속 판정은 매 검사마다, '정지 시 판정'은 새 판정이 나왔을 때만 센다

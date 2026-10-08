@@ -81,6 +81,10 @@ class AppConfig:
     mini_position: str = "auto"        # auto | right | left (하단 오른쪽/왼쪽)
     snapshot_scale: int = 3            # NG 스냅샷 확대 배율 (보기용, 1~4) – 원본은 ROI 크기로 따로 저장
     language: str = "ko"               # 화면 언어: ko | en
+    llm_enabled: bool = False          # 의견 에이전트에 로컬/사내 LLM 연결 (선택)
+    llm_url: str = "http://127.0.0.1:11434/v1"   # OpenAI 호환 API 주소 (localhost·사내망만 허용)
+    llm_model: str = ""                # 예: qwen2.5:7b
+    llm_api_key: str = ""              # 서버가 요구할 때만
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)
 
@@ -172,6 +176,10 @@ def config_from_dict(d: dict) -> AppConfig:
     cfg.snapshot_scale = max(1, min(4, _to_int(d.get("snapshot_scale"), 3)))
     lang = str(d.get("language") or "ko")
     cfg.language = lang if lang in ("ko", "en") else "ko"
+    cfg.llm_enabled = bool(d.get("llm_enabled", False))
+    cfg.llm_url = str(d.get("llm_url") or "http://127.0.0.1:11434/v1").strip()
+    cfg.llm_model = str(d.get("llm_model") or "").strip()
+    cfg.llm_api_key = str(d.get("llm_api_key") or "").strip()
     cfg.pc_label = str(d.get("pc_label") or socket.gethostname())
     seen = set()
     for item in d.get("rois") or []:

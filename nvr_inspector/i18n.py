@@ -12,9 +12,9 @@ _en: Dict[str, str] = {}
 
 
 def _load() -> Dict[str, str]:
-    from lang import en_agent, en_dialogs, en_engine, en_gui
+    from lang import en_advisor, en_agent, en_dialogs, en_engine, en_gui
     table: Dict[str, str] = {}
-    for mod in (en_engine, en_agent, en_gui, en_dialogs):
+    for mod in (en_engine, en_agent, en_gui, en_dialogs, en_advisor):
         table.update(mod.EN)
     return table
 

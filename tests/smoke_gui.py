@@ -217,6 +217,9 @@ def main():
     # ---- 화면 언어 전환: 영어로 모든 창을 열어 보고 다시 한국어로 ----
     language_check(app, roi)
 
+    # ---- 의견 에이전트: 분석 → 의견 카드, LLM 없이 질문, 가짜 로컬 LLM 서버로 질문 ----
+    advisor_check(app, roi)
+
     # ---- 카메라 월: 카드 끌어서 이동 / 크기 조절 / 자동 정렬 ----
     wall_drag_check(app, roi)
 
@@ -489,6 +492,22 @@ def capture_previews(app, out):
             shot = g.grab(x, y, rw, rh)
         Image.fromarray(shot).save(os.path.join(out, f"dashboard_{w}x{h}.png"))
         print(f"대시보드 캡처: 요청 {w}x{h} → 실제 창 {rw}x{rh}")
+    # 의견 탭 캡처
+    root.geometry("1920x1040+0+0" if sw >= 1920 else f"{sw}x{sh - 40}+0+0")
+    root.update()
+    app._place_sash()
+    app._advice = None
+    app._run_advisor(force=True)
+    wait_event(app, lambda: app._advice is not None)
+    app.side_tabs.select(app.advisor_panel)
+    for _ in range(4):
+        root.update()
+        _time.sleep(0.1)
+    with Grabber() as g:
+        shot = g.grab(root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height())
+    Image.fromarray(shot).save(os.path.join(out, "dashboard_advisor.png"))
+    app.side_tabs.select(app.feed)
+    root.update()
     # 전체 화면: 메인 창 최소화 + 미니 모니터 + 탐지 팝업
     root.attributes("-topmost", False)
     root.iconify()
@@ -538,6 +557,67 @@ def capture_previews(app, out):
     root.attributes("-topmost", False)
     print("영어 대시보드 캡처 완료")
     app.set_language("ko")
+
+
+def wait_event(app, cond, timeout=15.0):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        app._poll_events()
+        app.root.update()
+        if cond():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def advisor_check(app, roi):
+    import http.server
+    import json as _json
+    import threading
+    app._advice = None
+    app._run_advisor(force=True)
+    assert wait_event(app, lambda: app._advice is not None), "의견 분석 결과가 오지 않음"
+    items = app._advice[0]
+    print(f"의견 {len(items)}건: " + " | ".join(a.title for a in items[:4]))
+    assert app.advisor_panel.inner.winfo_children(), "의견 카드가 표시되지 않음"
+    app.side_tabs.select(app.advisor_panel)
+    app.root.update()
+    # LLM 없이 질문 → 규칙 분석으로 답
+    app._ask_llm("무엇을 먼저 해야 하나요?")
+    assert "LLM이 연결되어 있지 않아" in app.advisor_panel.answers[0][1]
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = _json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert "분석 자료" in body["messages"][1]["content"] or "ROI" in body["messages"][1]["content"]
+            out = _json.dumps({"choices": [{"message": {"content": "1. 테스트 LLM 의견"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        app.cfg.llm_enabled = True
+        app.cfg.llm_url = f"http://127.0.0.1:{server.server_port}/v1"
+        app.cfg.llm_model = "test-model"
+        app._show_advice()
+        app._llm_summary()
+        assert wait_event(app, lambda: app.advisor_panel.answers[0][1] == "1. 테스트 LLM 의견"), \
+            app.advisor_panel.answers[:1]
+        print("LLM(가짜 로컬 서버) 종합 의견 수신 확인")
+    finally:
+        server.shutdown()
+        app.cfg.llm_enabled = False
+        app._show_advice()
+    app.side_tabs.select(app.feed)
+    app.root.update()
 
 
 def language_check(app, roi):

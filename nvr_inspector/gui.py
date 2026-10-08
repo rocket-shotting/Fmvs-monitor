@@ -1,21 +1,25 @@
 """메인 창 (관제센터 대시보드): KPI·카메라 월·에이전트 활동 피드·NG 추이 + ROI 관리/설정."""
 import copy
+import json
 import logging
 import os
 import queue
 import shutil
+import threading
 import time
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Dict, List, Optional
 
+import advisor as advisormod
 import agent as agentmod
 import alert
 import config as cfgmod
 import dashboard as db
 import detectors
 import housekeeping
+import llm
 import notifier
 import overlay
 import paths
@@ -70,6 +74,12 @@ class App:
         self.consecutive: Dict[str, int] = {}     # ROI별 연속 NG 횟수 (팝업 조건)
         self.latest_frames: Dict[str, object] = {}  # ROI별 최신 화면 (리포트 이미지)
         self.mini = db.MiniMonitor(self.root, on_open=self._open_dashboard, on_stop=self.stop)
+        self.advice_hidden: set = set()              # 사용자가 숨긴 의견
+        self._advice: Optional[tuple] = None         # (의견 목록, 분석 시각)
+        self._advice_known: set = set()              # 이미 알린 의견 (새 의견만 활동 로그에 알림)
+        self._advisor_busy = False
+        self._llm_busy = False
+        self._selfcheck_cache: Dict[str, tuple] = {}
 
         self._build()
         self.agent.listeners.append(self.feed.add)
@@ -82,6 +92,7 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(200, self._poll_events)
         self.root.after(500, self._heartbeat)
+        self.root.after(3000, self._run_advisor)
         if self.cfg.auto_start and self.cfg.rois:
             self.root.after(800, self.start)
 
@@ -162,8 +173,17 @@ class App:
         self.wall.pack(fill="both", expand=True)
         hpaned.add(wall_box, weight=3)
         side = tk.Frame(hpaned, bg=T["bg"], width=430)
-        self.feed = db.FeedPanel(side)          # 에이전트 활동 + 시스템 로그 통합
-        self.feed.pack(fill="both", expand=True, pady=(0, 8))
+        tabs = ttk.Notebook(side, style="Dark.TNotebook")
+        tabs.pack(fill="both", expand=True, pady=(0, 8))
+        self.feed = db.FeedPanel(tabs)          # 에이전트 활동 + 시스템 로그 통합
+        tabs.add(self.feed, text=tr("  활동 · 로그  "))
+        self.advisor_panel = db.AdvisorPanel(tabs, self.advice_hidden, on_action=self._advice_action,
+                                             on_refresh=lambda: self._run_advisor(force=True),
+                                             on_ask=self._ask_llm, on_summary=self._llm_summary)
+        tabs.add(self.advisor_panel, text=tr("  💡 의견  "))
+        self.side_tabs = tabs
+        if self._advice is not None:
+            self._show_advice()
         self.trend = db.TrendChart(side)
         self.trend.pack(fill="x")
         hpaned.add(side, weight=2)
@@ -725,11 +745,128 @@ class App:
                 self.trend.draw(self.agent.hourly_series(12))
             if self._beat % 4 == 1:
                 self._refresh_trends()
+            if self._beat % 600 == 0:              # 5분마다 의견 에이전트 분석
+                self._run_advisor()
             if self._beat % 7200 == 0:             # 1시간마다 보관 기간 정리
                 self._purge_old_files()
         except tk.TclError:
             log.exception("대시보드 갱신 오류")
         self.root.after(500, self._heartbeat)
+
+    # ================= 의견 에이전트 (Advisor) =================
+    def _advisor_inputs(self):
+        """분석 스레드에 넘길 자료 사본 (화면 스레드에서 만든다)."""
+        rois = copy.deepcopy(self.cfg.rois)
+        stats = {rid: copy.deepcopy(st) for rid, st in self.agent.stats.items()}
+        hourly = {r.id: dict(self.agent.hourly_series(12, r.id)) for r in rois}
+        ctx = advisormod.Context(running=self.monitor is not None, teams_enabled=self.cfg.teams_enabled,
+                                 uptime_sec=self.agent.kpis().get("uptime", 0.0))
+        return rois, stats, hourly, ctx
+
+    def _sample_info(self, rois):
+        """ROI별 샘플 수와 자체 검증 요약 (샘플 파일이 바뀌었을 때만 다시 계산)."""
+        counts, checks = {}, {}
+        for roi in rois:
+            files = {c: paths.reference_paths(roi.id, c) for c in detectors.SAMPLE_CLASSES}
+            counts[roi.id] = {c: len(f) for c, f in files.items()}
+            if roi.detector not in detectors.REFERENCE_KINDS or not files["ok"]:
+                continue
+            try:
+                key = (roi.detector, json.dumps(roi.params, sort_keys=True),
+                       tuple((p, os.path.getmtime(p)) for f in files.values() for p in f))
+            except OSError:
+                continue
+            cached = self._selfcheck_cache.get(roi.id)
+            if cached and cached[0] == key:
+                checks[roi.id] = cached[1]
+                continue
+            try:
+                summary = detectors.self_check(roi.detector, roi.params, worker.load_samples(roi.id))["summary"]
+            except Exception as e:
+                summary = ""
+                log.warning("자체 검증 실패 [%s]: %s", roi.name, e)
+            self._selfcheck_cache[roi.id] = (key, summary)
+            checks[roi.id] = summary
+        return counts, checks
+
+    def _run_advisor(self, force: bool = False):
+        """의견 분석 (백그라운드). force: 사용자가 요청 – 지금은 주기 분석과 같고 표시만 즉시."""
+        if self._advisor_busy:
+            return
+        self._advisor_busy = True
+        rois, stats, hourly, ctx = self._advisor_inputs()
+
+        def work():
+            try:
+                counts, checks = self._sample_info(rois)
+                items = advisormod.analyze(rois, stats, counts, checks, hourly, ctx)
+            except Exception as e:
+                log.exception("의견 분석 실패")
+                items = [advisormod.Advice("advisor_error", "warn", tr("의견 분석 오류"), str(e))]
+            self.events.put(("advice", items, datetime.now().strftime("%H:%M:%S")))
+
+        threading.Thread(target=work, name="advisor", daemon=True).start()
+
+    def _show_advice(self, announce: bool = False):
+        items, when = self._advice
+        client = llm.from_config(self.cfg)
+        self.advisor_panel.show(items, client.model if client and client.model else None, when)
+        _n, important = self.advisor_panel.visible_count()
+        self.side_tabs.tab(self.advisor_panel, text=tr("  💡 의견 {n}  ", n=important) if important
+                           else tr("  💡 의견  "))
+        if announce:
+            new = [a for a in items if a.level in ("critical", "warn") and a.key not in self._advice_known]
+            self._advice_known = {a.key for a in items}
+            if new:
+                more = tr(" 외 {n}건", n=len(new) - 1) if len(new) > 1 else ""
+                self.agent.say("think", tr("의견 에이전트: {title}{more} – [💡 의견] 탭에서 확인",
+                                           title=new[0].title, more=more))
+
+    def _advice_action(self, advice):
+        if advice.roi_id and self.tree.exists(advice.roi_id):
+            self._select_roi(advice.roi_id)
+        if advice.action == "samples":
+            self.open_samples()
+        elif advice.action == "edit":
+            self.edit_selected()
+        elif advice.action == "settings":
+            self.open_settings()
+        self._run_advisor(force=True)
+
+    def _ask_llm(self, question: str):
+        client = llm.from_config(self.cfg)
+        if client is None:
+            items = self._advice[0] if self._advice else []
+            words = [r.name for r in self.cfg.rois if r.name and r.name in question]
+            related = [a for a in items if not words or any(w in a.title for w in words)][:4]
+            lines = [tr("LLM이 연결되어 있지 않아 규칙 분석 결과로 답합니다. "
+                        "(설정 → LLM 연결에서 켜면 자연어로 답합니다)")]
+            lines += [f"• {a.title} – {a.body}" for a in related] or [tr("관련된 개선 의견이 없습니다.")]
+            self.advisor_panel.show_answer(question, "\n".join(lines))
+            return
+        if self._llm_busy:
+            return
+        self._llm_busy = True
+        self.advisor_panel.set_busy(True)
+        rois, stats, _hourly, ctx = self._advisor_inputs()
+        items = self._advice[0] if self._advice else []
+        counts = {r.id: {c: len(paths.reference_paths(r.id, c)) for c in detectors.SAMPLE_CLASSES} for r in rois}
+        data = advisormod.summary_text(rois, stats, counts, items, ctx)
+
+        def work():
+            try:
+                answer, error = client.chat(f"{question}\n\n---\n{data}"), False
+            except llm.LLMError as e:
+                answer, error = str(e), True
+            except Exception as e:
+                log.exception("LLM 요청 실패")
+                answer, error = str(e), True
+            self.events.put(("llm", question, answer, error))
+
+        threading.Thread(target=work, name="llm", daemon=True).start()
+
+    def _llm_summary(self):
+        self._ask_llm(tr("현재 상태를 종합해서 우선순위가 높은 운영 의견을 주세요."))
 
     # ================= 에이전트 행동 =================
     def _run_actions(self, actions):
@@ -837,6 +974,15 @@ class App:
                     self.agent.on_recover(info)
                 elif kind == "log":
                     self.log(event[1], event[2])
+                elif kind == "advice":
+                    self._advisor_busy = False
+                    self._advice = (event[1], event[2])
+                    self._show_advice(announce=True)
+                elif kind == "llm":
+                    self._llm_busy = False
+                    self.advisor_panel.set_busy(False)
+                    self.advisor_panel.show_answer(event[1], event[2], event[3])
+                    self.side_tabs.select(self.advisor_panel)
                 elif kind == "stopped":
                     if self.monitor is not None and not self.monitor.is_alive():
                         self.monitor = None

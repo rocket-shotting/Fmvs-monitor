@@ -24,8 +24,14 @@ class SettingsDialog:
         top.protocol("WM_DELETE_WINDOW", self._cancel)
         body = ttk.Frame(top, padding=12)
         body.pack(fill="both", expand=True)
+        cols = ttk.Frame(body)
+        cols.pack(fill="both", expand=True)
+        left = ttk.Frame(cols)
+        left.pack(side="left", fill="both", expand=True, anchor="n")
+        right = ttk.Frame(cols)
+        right.pack(side="left", fill="both", expand=True, anchor="n", padx=(12, 0))
 
-        general = ttk.LabelFrame(body, text=tr("검출"), padding=8)
+        general = ttk.LabelFrame(left, text=tr("검출"), padding=8)
         general.pack(fill="x", pady=(0, 8))
         self.v_interval = tk.StringVar(value=f"{cfg.interval_sec:g}")
         self.v_pc = tk.StringVar(value=cfg.pc_label)
@@ -48,7 +54,7 @@ class SettingsDialog:
         for i, (text, var) in enumerate(checks, start=2):
             ttk.Checkbutton(general, text=text, variable=var).grid(row=i, column=0, columnspan=2, sticky="w")
 
-        teams = ttk.LabelFrame(body, text=tr("Teams 알림 (Power Automate Workflows 웹훅)"), padding=8)
+        teams = ttk.LabelFrame(left, text=tr("Teams 알림 (Power Automate Workflows 웹훅)"), padding=8)
         teams.pack(fill="x")
         self.v_teams = tk.BooleanVar(value=cfg.teams_enabled)
         self.v_webhook = tk.StringVar(value=cfg.webhook_url)
@@ -61,8 +67,8 @@ class SettingsDialog:
                                  "※ URL에 인증 서명이 들어 있으니 외부에 공유하지 마세요."),
                   foreground="#555555", justify="left").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        agent_box = ttk.LabelFrame(body, text=tr("비전 에이전트 (PC 내부에서만 동작)"), padding=8)
-        agent_box.pack(fill="x", pady=(8, 0))
+        agent_box = ttk.LabelFrame(right, text=tr("비전 에이전트 (PC 내부에서만 동작)"), padding=8)
+        agent_box.pack(fill="x")
         self.v_restart = tk.BooleanVar(value=cfg.agent_auto_restart)
         self.v_escalation = tk.BooleanVar(value=cfg.agent_escalation)
         self.v_shift = tk.StringVar(value=cfg.shift_times)
@@ -78,7 +84,7 @@ class SettingsDialog:
         ttk.Label(agent_box, text=tr("예: 08:00,20:00 · 비우면 자동 리포트 안 함 · 리포트는 reports 폴더에 HTML로 저장"),
                   foreground="#555555").grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        ops = ttk.LabelFrame(body, text=tr("팝업 · 미니 모니터 · 보관"), padding=8)
+        ops = ttk.LabelFrame(left, text=tr("팝업 · 미니 모니터 · 보관"), padding=8)
         ops.pack(fill="x", pady=(8, 0))
         self.v_consec = tk.StringVar(value=str(cfg.popup_consecutive))
         self.v_retention = tk.StringVar(value=str(cfg.retention_days))
@@ -104,11 +110,53 @@ class SettingsDialog:
                                "Teams 알림은 이 설정과 무관하게 판정마다 전송됩니다."),
                   foreground="#555555", wraplength=560, justify="left").grid(row=4, column=0, columnspan=2, sticky="w")
 
+        self._build_llm(right)
+
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(10, 0))
         ttk.Button(btns, text=tr("저장"), width=12, command=self._save).pack(side="right", padx=(6, 0))
         ttk.Button(btns, text=tr("취소"), width=12, command=self._cancel).pack(side="right")
         top.bind("<Escape>", lambda _e: self._cancel())
+
+    def _build_llm(self, parent):
+        box = ttk.LabelFrame(parent, text=tr("LLM 연결 (선택 · 의견 에이전트 자연어 답변)"), padding=8)
+        box.pack(fill="x", pady=(8, 0))
+        c = self.cfg
+        self.v_llm = tk.BooleanVar(value=c.llm_enabled)
+        self.v_llm_url = tk.StringVar(value=c.llm_url)
+        self.v_llm_model = tk.StringVar(value=c.llm_model)
+        self.v_llm_key = tk.StringVar(value=c.llm_api_key)
+        ttk.Checkbutton(box, text=tr("LLM 사용 (이 PC 또는 사내 서버만)"), variable=self.v_llm).grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        for i, (label, var, width, show) in enumerate(
+                ((tr("서버 주소 (OpenAI 호환)"), self.v_llm_url, 34, ""), (tr("모델 이름"), self.v_llm_model, 24, ""),
+                 (tr("API 키 (필요할 때만)"), self.v_llm_key, 24, "•")), start=1):
+            ttk.Label(box, text=label).grid(row=i, column=0, sticky="w", pady=2)
+            ttk.Entry(box, textvariable=var, width=width, show=show).grid(row=i, column=1, sticky="w", padx=6)
+        test = ttk.Frame(box)
+        test.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Button(test, text=tr("연결 테스트"), command=self._test_llm).pack(side="left")
+        self.llm_status = ttk.Label(test, text="", foreground="#555555", wraplength=300, justify="left")
+        self.llm_status.pack(side="left", padx=8)
+        ttk.Label(box, text=tr("예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen2.5:7b\n"
+                               "LM Studio → http://127.0.0.1:1234/v1\n"
+                               "보내는 내용: ROI별 판정 통계·의견 목록(텍스트)만. 화면·이미지는 보내지 않습니다.\n"
+                               "외부 인터넷 주소는 보안상 사용할 수 없습니다."),
+                  foreground="#555555", justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _test_llm(self):
+        import llm
+        client = llm.LocalLLM(self.v_llm_url.get(), self.v_llm_model.get(), self.v_llm_key.get(), timeout=20)
+        self.llm_status.configure(text=tr("연결 중…"), foreground="#555555")
+        self.top.config(cursor="watch")
+        self.top.update()
+        try:
+            answer = client.chat(tr("연결 테스트입니다. 'OK' 한 단어로만 답하세요."))
+            self.llm_status.configure(text=tr("✔ 연결됨 – 응답: {answer}", answer=answer[:60]), foreground="#1b5e20")
+        except llm.LLMError as e:
+            self.llm_status.configure(text=f"⚠ {e}", foreground="#b71c1c")
+        finally:
+            self.top.config(cursor="")
 
     def _save(self):
         try:
@@ -170,6 +218,16 @@ class SettingsDialog:
         c.mini_position = next((k for k, v in _MINI_POSITIONS.items() if tr(v) == selected_pos), "auto")
         c.teams_enabled = self.v_teams.get()
         c.webhook_url = url
+        c.llm_enabled = self.v_llm.get()
+        c.llm_url = self.v_llm_url.get().strip()
+        c.llm_model = self.v_llm_model.get().strip()
+        c.llm_api_key = self.v_llm_key.get().strip()
+        if c.llm_enabled:
+            import llm
+            error = llm.LocalLLM(c.llm_url, c.llm_model, c.llm_api_key).check()
+            if error:
+                messagebox.showerror(tr("입력 오류"), error, parent=self.top)
+                return
         self.result = c
         self.top.destroy()
 

@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import agent  # noqa: E402
 import config  # noqa: E402
 import detectors  # noqa: E402
+import advisor  # noqa: E402
+import llm  # noqa: E402
 import notifier  # noqa: E402
 import occlusion  # noqa: E402
 import worker  # noqa: E402
@@ -714,6 +716,7 @@ class OcclusionTests(unittest.TestCase):
         mon = worker.Monitor(cfg, events, mock.Mock())
         windows = [self.win("FMVS.exe", (400, 0, 900, 900), own=True), self.win("NVR.exe", (0, 0, 1920, 1080))]
         with mock.patch.object(worker.winutil, "IS_WINDOWS", True), \
+                mock.patch.object(worker.winutil, "session_locked", return_value=False), \
                 mock.patch.object(worker.winutil, "visible_windows", return_value=windows):
             mon._tick(cfg, FakeGrabber([solid((200, 200, 200), 80, 100)]))
             windows.insert(0, self.win("FMVS.exe", (150, 150, 260, 260), own=True))
@@ -721,6 +724,120 @@ class OcclusionTests(unittest.TestCase):
         states = [e[2] for e in list(events.queue) if e[0] == "status"]
         self.assertNotEqual(states[0], "skip")
         self.assertEqual(states[-1], "skip")
+
+
+class AdvisorTests(unittest.TestCase):
+    def roi(self, **kw):
+        base = dict(name="A", detector="match", still_only=True, expected_process="NVR.exe", assignee="kim")
+        base.update(kw)
+        return config.ROI(**base)
+
+    def stats(self, **kw):
+        st = agent.RoiStats()
+        for k, v in kw.items():
+            setattr(st, k, v)
+        return st
+
+    def keys(self, items):
+        return {a.key.split(":")[0] for a in items}
+
+    def test_samples_and_setup_advice(self):
+        r1, r2, r3 = self.roi(name="A"), self.roi(name="B"), self.roi(name="C", expected_process="")
+        samples = {r1.id: {"ok": 0, "ng": 0, "skip": 0}, r2.id: {"ok": 1, "ng": 1, "skip": 0},
+                   r3.id: {"ok": 5, "ng": 2, "skip": 1}}
+        checks = {r2.id: "⚠ 자체 검증: OK 0/1 맞춤"}
+        items = advisor.analyze([r1, r2, r3], {}, samples, checks, {}, advisor.Context(running=True))
+        by_key = {a.key: a for a in items}
+        self.assertEqual(items[0].level, "critical")
+        self.assertEqual(by_key[f"no_ok:{r1.id}"].action, "samples")
+        self.assertIn(f"few_ok:{r2.id}", by_key)
+        self.assertIn(f"selfcheck:{r2.id}", by_key)
+        self.assertIn(f"no_skip:{r2.id}", by_key)
+        self.assertIn(f"no_proc:{r3.id}", by_key)
+        self.assertNotIn(f"few_ok:{r3.id}", by_key)
+        self.assertNotIn("stopped", by_key)
+
+    def test_runtime_advice(self):
+        r = self.roi(assignee="")
+        st = self.stats(inspections=40, ok=24, ng=16)
+        st.state_counts.update({"skip": 20, "ok": 24, "alarm": 16})
+        st.last_state, st.last_detail = "skip", "다른 창이 ROI를 가림: chrome.exe 40%"
+        hourly = {r.id: {"10": 0, "11": 1, "12": 0, "13": 6}}
+        items = advisor.analyze([r], {r.id: st}, {r.id: {"ok": 5, "ng": 1, "skip": 1}}, {}, hourly,
+                                advisor.Context(running=True, teams_enabled=False))
+        keys = self.keys(items)
+        self.assertTrue({"skip", "ngrate", "burst", "assignee", "teams_off"} <= keys, keys)
+        skip = next(a for a in items if a.key.startswith("skip:"))
+        self.assertIn("chrome.exe", skip.body)
+        self.assertEqual([a.level for a in items], sorted((a.level for a in items),
+                                                          key=advisor.LEVEL_ORDER.get))
+
+    def test_never_stopped_and_quiet_cases(self):
+        r = self.roi()
+        st = self.stats()
+        st.state_counts.update({"moving": 60})
+        items = advisor.analyze([r], {r.id: st}, {r.id: {"ok": 5, "ng": 1, "skip": 1}}, {}, {},
+                                advisor.Context(running=True))
+        self.assertIn("moving", self.keys(items))
+        healthy = self.stats(inspections=50, ok=49, ng=1)
+        healthy.state_counts.update({"ok": 49, "alarm": 1})
+        items = advisor.analyze([r], {r.id: healthy}, {r.id: {"ok": 5, "ng": 1, "skip": 1}}, {},
+                                {r.id: {"10": 1, "11": 0}}, advisor.Context(running=True, teams_enabled=True))
+        self.assertEqual(items, [])
+        self.assertEqual(advisor.analyze([], {}, {}, {}, {}, advisor.Context())[0].key, "no_roi")
+
+    def test_summary_text_has_no_images(self):
+        r = self.roi()
+        text = advisor.summary_text([r], {r.id: self.stats(inspections=3, ok=3)}, {r.id: {"ok": 2}}, [],
+                                    advisor.Context(running=True))
+        self.assertIn("ROI 'A'", text)
+        self.assertIn("inspections=3", text)
+
+
+class LLMTests(unittest.TestCase):
+    def test_local_url_policy(self):
+        for url in ("http://127.0.0.1:11434/v1", "http://localhost:1234/v1", "http://10.1.2.3/v1",
+                    "http://192.168.0.5:8000/v1", "https://172.20.1.1/v1"):
+            self.assertTrue(llm.is_local_url(url), url)
+        for url in ("https://api.openai.com/v1", "http://8.8.8.8/v1", "ftp://127.0.0.1", "", "nonsense"):
+            self.assertFalse(llm.is_local_url(url), url)
+        self.assertIn("보안", llm.LocalLLM("http://8.8.8.8/v1", "m").check())
+        self.assertIsNone(llm.from_config(config.AppConfig()))      # 기본 꺼짐
+
+    def test_chat_against_local_server(self):
+        import http.server
+        import threading
+        seen = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["path"] = self.path
+                seen["auth"] = self.headers.get("Authorization")
+                seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                out = json.dumps({"choices": [{"message": {"content": " 1. 샘플을 더 등록하세요 "}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/v1/"
+            answer = llm.LocalLLM(url, "qwen", api_key="k").chat("질문")
+            self.assertEqual(answer, "1. 샘플을 더 등록하세요")
+            self.assertEqual(seen["path"], "/v1/chat/completions")
+            self.assertEqual(seen["auth"], "Bearer k")
+            self.assertEqual(seen["body"]["model"], "qwen")
+            self.assertEqual([m["role"] for m in seen["body"]["messages"]], ["system", "user"])
+        finally:
+            server.shutdown()
+        with self.assertRaises(llm.LLMError):
+            llm.LocalLLM(f"http://127.0.0.1:{server.server_port}/v1", "qwen", timeout=2).chat("x")
 
 
 class NotifierTests(unittest.TestCase):

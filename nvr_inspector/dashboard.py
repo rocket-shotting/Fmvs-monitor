@@ -6,6 +6,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageTk
 
+import llm
 from agent import FEED_KINDS, FeedItem
 from config import WALL_MAX, WALL_MIN
 from i18n import tr
@@ -477,6 +478,154 @@ class FeedPanel(tk.Frame):
 
 
 SYS_KINDS = {"sys": ("·", "로그"), "error": ("✖", "오류")}
+
+
+class AdvisorPanel(tk.Frame):
+    """의견 에이전트 패널: 운영 개선 의견 카드 + (LLM 연결 시) 종합 의견·질문 답변."""
+    LEVEL_COLORS = {"critical": T["red"], "warn": T["amber"], "info": T["sky"], "llm": T["indigo"],
+                    "example": T["dim"]}
+    ACTION_TEXT = {"samples": "샘플 열기", "edit": "ROI 편집", "settings": "설정 열기"}
+
+    def __init__(self, master, hidden: set, on_action: Callable, on_refresh: Callable,
+                 on_ask: Callable, on_summary: Callable):
+        super().__init__(master, bg=T["panel"], highlightthickness=1, highlightbackground=T["border"])
+        self.hidden = hidden
+        self.on_action, self.on_ask = on_action, on_ask
+        self.items: list = []
+        self.answers: List[Tuple[str, str, bool]] = []     # (질문, 답, 오류)
+        self.llm_label: Optional[str] = None
+        self._bodies: List[tk.Label] = []
+        head = tk.Frame(self, bg=T["panel"])
+        head.pack(fill="x", padx=12, pady=(10, 2))
+        tk.Label(head, text="💡 AGENT ADVISOR", bg=T["panel"], fg=T["text"],
+                 font=("Segoe UI", 11, "bold")).pack(side="left")
+        self.mode = tk.Label(head, text="", bg=T["panel"], fg=T["muted"], font=(F, 8))
+        self.mode.pack(side="left", padx=8)
+        FlatButton(head, tr("⟳ 다시 분석"), on_refresh, padx=8, pady=2).pack(side="right")
+        self.btn_summary = FlatButton(head, tr("🤖 LLM 종합 의견"), on_summary, padx=8, pady=2)
+        self.btn_summary.pack(side="right", padx=(0, 6))
+        self.when = tk.Label(self, text="", bg=T["panel"], fg=T["dim"], font=(F, 8), anchor="w")
+        self.when.pack(fill="x", padx=12)
+
+        ask = tk.Frame(self, bg=T["panel"])
+        ask.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
+        self.question = tk.Entry(ask, bg=T["card"], fg=T["text"], insertbackground=T["text"], relief="flat",
+                                 font=(F, 9), highlightthickness=1, highlightbackground=T["border"])
+        self.question.pack(side="left", fill="x", expand=True, ipady=4)
+        self.question.bind("<Return>", lambda _e: self._ask())
+        self.btn_ask = FlatButton(ask, tr("묻기"), self._ask, kind="primary", padx=12, pady=3)
+        self.btn_ask.pack(side="left", padx=(6, 0))
+
+        body = tk.Frame(self, bg=T["panel"])
+        body.pack(fill="both", expand=True, padx=(12, 4), pady=4)
+        self.canvas = tk.Canvas(body, bg=T["panel"], highlightthickness=0)
+        vsb = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview, style="Dark.Vertical.TScrollbar")
+        self.canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = tk.Frame(self.canvas, bg=T["panel"])
+        self._win = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", self._on_resize)
+        self.canvas.bind("<Enter>", lambda _e: self.canvas.bind_all("<MouseWheel>", self._on_wheel))
+        self.canvas.bind("<Leave>", lambda _e: self.canvas.unbind_all("<MouseWheel>"))
+
+    def _on_wheel(self, e):
+        self.canvas.yview_scroll(int(-e.delta / 120), "units")
+
+    def _on_resize(self, e):
+        self.canvas.itemconfigure(self._win, width=e.width)
+        for lbl in self._bodies:
+            lbl.configure(wraplength=max(200, e.width - 40))
+
+    def _ask(self):
+        q = self.question.get().strip()
+        if q:
+            self.question.delete(0, "end")
+            self.on_ask(q)
+
+    # ---------- 표시 ----------
+    def show(self, items, llm_label: Optional[str], when: str):
+        self.items, self.llm_label = list(items), llm_label
+        self.when.configure(text=tr("마지막 분석 {when} · 검출 기록·샘플·설정 기반", when=when))
+        self._render()
+
+    def show_answer(self, question: str, text: str, error: bool = False):
+        self.answers.insert(0, (question, text, error))
+        del self.answers[5:]
+        self._render()
+
+    def set_busy(self, busy: bool):
+        self.btn_ask.set_enabled(not busy)
+        self.btn_summary.set_enabled(not busy and self.llm_label is not None)
+
+    def visible_count(self) -> Tuple[int, int]:
+        """(표시 중인 의견 수, 그중 주의·긴급 수)."""
+        shown = [a for a in self.items if a.key not in self.hidden]
+        return len(shown), sum(1 for a in shown if a.level in ("critical", "warn"))
+
+    def _render(self):
+        for child in self.inner.winfo_children():
+            child.destroy()
+        self._bodies = []
+        if self.llm_label:
+            self.mode.configure(text=tr("규칙 분석 + LLM ({model})", model=self.llm_label), fg=T["green"])
+        else:
+            self.mode.configure(text=tr("규칙 분석 · LLM 미연결"), fg=T["muted"])
+        self.btn_summary.set_enabled(self.llm_label is not None)
+        for q, text, error in self.answers:
+            self._card("llm", ("⚠ " if error else "🤖 ") + (q if len(q) <= 60 else q[:60] + "…"), text)
+        shown = [a for a in self.items if a.key not in self.hidden]
+        for a in shown:
+            self._card(a.level, a.title, a.body, a)
+        if not shown:
+            self._card("info", tr("✔ 지금은 개선 의견이 없습니다"),
+                       tr("검출 기록·샘플·설정에서 문제를 찾지 못했습니다. 5분마다 다시 분석합니다."))
+        if self.llm_label is None and not self.answers:
+            self._card("example", tr("🤖 LLM 연결 시 (예시)"),
+                       llm.example_answer() + "\n\n" +
+                       tr("설정 → LLM 연결에서 이 PC 또는 사내 서버의 LLM(Ollama·LM Studio 등)을 켜면 "
+                          "위 같은 종합 의견과 질문 답변을 받을 수 있습니다. 화면·이미지는 보내지 않습니다."))
+        if self.hidden:
+            row = tk.Frame(self.inner, bg=T["panel"])
+            row.pack(fill="x", pady=(2, 6))
+            tk.Label(row, text=tr("숨긴 의견 {n}개", n=len(self.hidden)), bg=T["panel"], fg=T["dim"],
+                     font=(F, 8)).pack(side="left")
+            FlatButton(row, tr("다시 보기"), self._unhide, padx=6, pady=1, font=(F, 8)).pack(side="left", padx=6)
+        width = self.canvas.winfo_width()
+        if width > 50:
+            for lbl in self._bodies:
+                lbl.configure(wraplength=max(200, width - 40))
+
+    def _card(self, level: str, title: str, body: str, advice=None):
+        color = self.LEVEL_COLORS.get(level, T["sky"])
+        card = tk.Frame(self.inner, bg=T["card"])
+        card.pack(fill="x", pady=(0, 6))
+        tk.Frame(card, bg=color, width=4).pack(side="left", fill="y")
+        box = tk.Frame(card, bg=T["card"])
+        box.pack(side="left", fill="both", expand=True, padx=10, pady=6)
+        tk.Label(box, text=title, bg=T["card"], fg=T["text"] if level != "example" else T["muted"],
+                 font=(F, 9, "bold"), anchor="w", justify="left").pack(fill="x")
+        lbl = tk.Label(box, text=body, bg=T["card"], fg=T["muted"], font=(F, 8), anchor="w", justify="left",
+                       wraplength=360)
+        lbl.pack(fill="x", pady=(2, 0))
+        self._bodies.append(lbl)
+        if advice is not None:
+            row = tk.Frame(box, bg=T["card"])
+            row.pack(fill="x", pady=(4, 0))
+            if advice.action:
+                FlatButton(row, tr(self.ACTION_TEXT[advice.action]),
+                           lambda a=advice: self.on_action(a), padx=8, pady=1, font=(F, 8, "bold")).pack(side="left")
+            FlatButton(row, tr("숨기기"), lambda k=advice.key: self._hide(k), padx=8, pady=1,
+                       font=(F, 8)).pack(side="left", padx=4)
+
+    def _hide(self, key: str):
+        self.hidden.add(key)
+        self._render()
+
+    def _unhide(self):
+        self.hidden.clear()
+        self._render()
 
 
 def draw_roi_rows(canvas: tk.Canvas, trends, x0: int, y0: int, width: int, row_h: int, max_rows: int,

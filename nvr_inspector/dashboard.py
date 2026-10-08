@@ -273,22 +273,23 @@ class CameraWall(tk.Frame):
         auto = [rid for rid in self.order if rid not in self.manual]
         if auto:
             cw, ch = self._card_size(self.cards[auto[0]])
-            cell_w, cell_h = cw + self.GAP, ch + self.GAP
+            cell_w = cw + self.GAP
             width = max(self._width, cell_w + self.GAP)
-            cols = self._cols = max(1, (width - self.GAP) // cell_w)
-            # 직접 배치한 카드가 없으면 카드 묶음을 가운데 정렬
-            used = min(cols, len(auto))
-            x0 = self.GAP if taken else max(self.GAP, (width - used * cell_w + self.GAP) // 2)
-            slot = 0
-            for rid in auto:
-                while True:
-                    x = x0 + (slot % cols) * cell_w
-                    y = self.GAP + (slot // cols) * cell_h
-                    slot += 1
-                    if not any(_overlap((x, y, cw, ch), r) for r in taken):
-                        break
-                self.canvas.coords(self.items[rid], x, y)
-                taken.append((x, y, cw, ch))
+            self._cols = max(1, (width - self.GAP) // cell_w)
+            if not taken:
+                # 직접 배치한 카드가 없으면 격자로 채우고 카드 묶음을 가운데 정렬
+                used = min(self._cols, len(auto))
+                x0 = max(self.GAP, (width - used * cell_w + self.GAP) // 2)
+                for i, rid in enumerate(auto):
+                    x = x0 + (i % self._cols) * cell_w
+                    y = self.GAP + (i // self._cols) * (ch + self.GAP)
+                    self.canvas.coords(self.items[rid], x, y)
+                    taken.append((x, y, cw, ch))
+            else:
+                for rid in auto:
+                    x, y = _free_spot(cw, ch, taken, width, self.GAP)
+                    self.canvas.coords(self.items[rid], x, y)
+                    taken.append((x, y, cw, ch))
         self._update_scroll()
 
     def _update_scroll(self):
@@ -401,6 +402,21 @@ class CameraWall(tk.Frame):
     def blink(self, on: bool):
         for card in self.cards.values():
             card.blink(on)
+
+
+def _free_spot(w: int, h: int, taken, width: int, gap: int) -> Tuple[int, int]:
+    """이미 놓인 카드와 겹치지 않는 가장 위·왼쪽 자리 (bottom-left packing).
+    후보 = 왼쪽 끝·위쪽 끝 + 기존 카드의 오른쪽·아래쪽 바로 옆."""
+    xs = sorted({gap} | {x + cw + gap for x, _y, cw, _ch in taken})
+    ys = sorted({gap} | {y + ch + gap for _x, y, _cw, ch in taken})
+    grown = [(x - gap + 1, y - gap + 1, cw + 2 * gap - 2, ch + 2 * gap - 2) for x, y, cw, ch in taken]
+    for y in ys:
+        for x in xs:
+            if x + w + gap > width and x != gap:
+                continue
+            if not any(_overlap((x, y, w, h), r) for r in grown):
+                return x, y
+    return gap, max(y + ch for _x, y, _cw, ch in taken) + gap
 
 
 def _snap(v: float, step: int) -> int:

@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import types
 
 import numpy as np
 
@@ -69,6 +70,20 @@ def main():
     sd = samples_dialog.SamplesDialog(root, roi)
     root.update()
     assert "2장" in sd.sections["ok"]["count"].cget("text")
+    # 잘못 등록한 이미지 옮기기: 우클릭 메뉴 경로(_move) + 끌어 놓기
+    sd._move(paths.reference_paths(roi.id, "ok")[-1], "ng")
+    assert len(paths.reference_paths(roi.id, "ok")) == 1 and len(paths.reference_paths(roi.id, "ng")) == 1
+    sd.top.update()
+    ok_box = sd.sections["ok"]["box"]
+    tx, ty = ok_box.winfo_rootx() + ok_box.winfo_width() // 2, ok_box.winfo_rooty() + ok_box.winfo_height() // 2
+    assert sd._section_at(tx, ty) == "ok", sd._section_at(tx, ty)
+    ev = lambda x, y: types.SimpleNamespace(x_root=x, y_root=y)       # noqa: E731
+    sd._drag_start(ev(0, 0), paths.reference_paths(roi.id, "ng")[0], "ng", None)
+    sd._drag_move(ev(tx, ty))
+    sd._drag_end(ev(tx, ty))
+    assert len(paths.reference_paths(roi.id, "ok")) == 2 and not paths.reference_paths(roi.id, "ng"), \
+        "NG 칸의 이미지를 OK 칸으로 끌어 놓았는데 옮겨지지 않음"
+    print("샘플 이미지 이동(우클릭·끌어 놓기) 확인")
     sd.top.destroy()
     shape_roi = config.ROI(name="형상", w=160, h=120, detector="shape")
     sd = samples_dialog.SamplesDialog(root, shape_roi)
@@ -199,6 +214,9 @@ def main():
     assert app.tree.set(roi.id, "state") == gui.STATE_TEXT["moving"]
     app.monitor = None
 
+    # ---- 카메라 월: 카드 끌어서 이동 / 크기 조절 / 자동 정렬 ----
+    wall_drag_check(app, roi)
+
     # ---- ROI 가림 판정: 실제로 덮은 창이 있을 때만 건너뜀 ----
     occlusion_check(app)
 
@@ -274,6 +292,40 @@ def occlusion_check(app):
         root.update()
 
 
+def drag_card(app, roi, dx, dy, grip=False):
+    """카메라 월 카드를 (dx, dy)만큼 끈다 (grip=True면 크기 조절)."""
+    ev = lambda x, y: types.SimpleNamespace(x_root=x, y_root=y)       # noqa: E731
+    wall = app.wall
+    wall._press(roi.id, ev(500, 500), "resize" if grip else "move")
+    wall._motion(ev(500 + dx // 2, 500 + dy // 2))
+    wall._motion(ev(500 + dx, 500 + dy))
+    wall._release(ev(500 + dx, 500 + dy))
+    app.root.update()
+
+
+def wall_drag_check(app, roi):
+    card = app.wall.cards[roi.id]
+    x0, y0 = app.wall.canvas.coords(app.wall.items[roi.id])
+    drag_card(app, roi, 96, 40)
+    x1, y1 = app.wall.canvas.coords(app.wall.items[roi.id])
+    import dashboard
+    assert (x1, y1) == (dashboard._snap(x0 + 96, 8), dashboard._snap(y0 + 40, 8)), ((x0, y0), (x1, y1))
+    assert roi.wall[:2] == [int(x1), int(y1)], roi.wall
+    drag_card(app, roi, 160, 88, grip=True)
+    assert (card.vw, card.vh) == (256 + 160, 144 + 88), (card.vw, card.vh)
+    assert roi.wall[2:] == [416, 232], roi.wall
+    app.monitor = object.__new__(worker.Monitor)
+    app._sync_thumb_sizes()
+    assert app.monitor.thumb_sides[roi.id] == 416
+    app.monitor = None
+    app.wall._press(roi.id, types.SimpleNamespace(x_root=1, y_root=1), "move")    # 클릭 = 선택 (이동 없음)
+    app.wall._release(None)
+    assert app.tree.selection() == (roi.id,)
+    app.reset_wall_layout()
+    assert roi.wall == [] and (card.vw, card.vh) == (256, 144)
+    print("카메라 월 끌어서 이동·크기 조절·자동 정렬 확인")
+
+
 def tk_toplevel(root, x, y, w, h):
     import tkinter as tk
     win = tk.Toplevel(root)
@@ -340,6 +392,18 @@ def demo_dashboard(app):
         app.agent.on_alert({"roi_id": r.id, "roi_name": r.name, "kind": "alert", "detail": "NG"})
     app._poll_events()
     assert app.wall.cards[app.cfg.rois[0].id].has_frame, "카메라 월 썸네일 미표시"
+    # 첫 카드를 왼쪽 위로 옮기고 크게 – 나머지 카드는 빈 자리에 자동 배치
+    root.update()
+    first = app.cfg.rois[0]
+    fx, fy = app.wall.canvas.coords(app.wall.items[first.id])
+    drag_card(app, first, int(12 - fx), int(12 - fy))
+    drag_card(app, first, 176, 96, grip=True)
+    assert first.wall[0] <= 16 and first.wall[1] <= 16 and first.wall[2:] == [432, 240], first.wall
+    first_rect = (*first.wall[:2], *app.wall._card_size(app.wall.cards[first.id]))
+    for r in app.cfg.rois[1:]:
+        cx, cy = app.wall.canvas.coords(app.wall.items[r.id])
+        other = (cx, cy, *app.wall._card_size(app.wall.cards[r.id]))
+        assert not db_overlap(first_rect, other), f"자동 배치 카드가 직접 배치한 카드와 겹침: {r.name}"
     app.trend.draw(app.agent.hourly_series(12))
     app._refresh_kpis()
     for _ in range(4):
@@ -371,6 +435,21 @@ def demo_dashboard(app):
     app.monitor = None
 
 
+def db_overlap(a, b):
+    import dashboard
+    return dashboard._overlap(a, b)
+
+
+def check_layout(app):
+    """화면 분할: 위 = 카메라 월 | 활동·로그, 아래 = ROI 목록 | ROI 모니터링."""
+    wall, feed, tree, mon = app.wall, app.feed, app.tree, app.roi_trend
+    assert feed.winfo_rootx() > wall.winfo_rootx(), "활동·로그가 카메라 월 오른쪽에 있지 않음"
+    assert tree.winfo_rooty() > wall.winfo_rooty() + wall.winfo_height() - 5, "ROI 목록이 아래에 있지 않음"
+    assert mon.winfo_rooty() > feed.winfo_rooty() + feed.winfo_height() - 5, "ROI 모니터링이 아래에 있지 않음"
+    assert mon.winfo_rootx() > tree.winfo_rootx(), "ROI 모니터링이 ROI 목록 오른쪽에 있지 않음"
+    assert tree.winfo_height() > 60 and mon.winfo_height() > 100, (tree.winfo_height(), mon.winfo_height())
+
+
 def capture_previews(app, out):
     """여러 모니터 크기에서 대시보드를 캡처하고, 미니 모니터·팝업이 뜬 전체 화면도 캡처한다."""
     import time as _time
@@ -399,6 +478,7 @@ def capture_previews(app, out):
             _time.sleep(0.1)
         x, y = root.winfo_rootx(), root.winfo_rooty()
         rw, rh = root.winfo_width(), root.winfo_height()
+        check_layout(app)
         top_h = app.wall.winfo_height()
         print(f"  카메라 월 높이 {top_h}px / 창 {rh}px, 카드 열 수 {app.wall._cols}")
         assert top_h >= rh * 0.4, f"{w}x{h}: 카메라 월이 너무 작음 ({top_h}px)"

@@ -130,27 +130,38 @@ class App:
             tile.pack(side="left", fill="x", expand=True, padx=(0, 8))
             self.kpi[key] = tile
 
-        # ---- 본문: 카메라 월 | 에이전트 피드 + 추이 ----
+        # ---- 본문 위: 카메라 월 | 에이전트 활동·시스템 로그 + NG 추이 ----
         vpaned = ttk.PanedWindow(self.root, orient="vertical", style="Dark.TPanedwindow")
         vpaned.pack(fill="both", expand=True, padx=14, pady=(4, 0))
         hpaned = ttk.PanedWindow(vpaned, orient="horizontal", style="Dark.TPanedwindow")
         wall_box = tk.Frame(hpaned, bg=T["bg"])
-        tk.Label(wall_box, text="LIVE CAMERA WALL", bg=T["bg"], fg=T["text"],
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=8, pady=(4, 0))
-        self.wall = db.CameraWall(wall_box, on_select=self._select_roi, on_open=self._open_roi)
+        wall_head = tk.Frame(wall_box, bg=T["bg"])
+        wall_head.pack(fill="x", padx=8, pady=(4, 0))
+        tk.Label(wall_head, text="LIVE CAMERA WALL", bg=T["bg"], fg=T["text"],
+                 font=("Segoe UI", 11, "bold")).pack(side="left")
+        tk.Label(wall_head, text="카드 끌기: 이동 · ◢ 끌기: 크기 조절", bg=T["bg"], fg=T["muted"],
+                 font=(db.F, 8)).pack(side="left", padx=12)
+        db.FlatButton(wall_head, "⟲ 자동 정렬", self.reset_wall_layout, padx=10, pady=3).pack(side="right")
+        self.wall = db.CameraWall(wall_box, on_select=self._select_roi, on_open=self._open_roi,
+                                  on_layout=self._wall_layout_changed)
         self.wall.pack(fill="both", expand=True)
         hpaned.add(wall_box, weight=3)
         side = tk.Frame(hpaned, bg=T["bg"], width=430)
-        self.roi_trend = db.RoiTrendPanel(side, on_select=self._select_roi)
-        self.roi_trend.pack(fill="both", expand=True, pady=(0, 8))
+        self.feed = db.FeedPanel(side)          # 에이전트 활동 + 시스템 로그 통합
+        self.feed.pack(fill="both", expand=True, pady=(0, 8))
         self.trend = db.TrendChart(side)
         self.trend.pack(fill="x")
         hpaned.add(side, weight=2)
         vpaned.add(hpaned, weight=4)
+        self._hpaned = hpaned
 
-        # ---- 하단 탭: ROI 목록 / 에이전트 활동·시스템 로그 ----
-        nb = ttk.Notebook(vpaned, style="Dark.TNotebook")
-        tree_frame = tk.Frame(nb, bg=T["panel"])
+        # ---- 본문 아래: ROI 목록 | ROI 모니터링 (ROI별 NG 추이) ----
+        bottom = ttk.PanedWindow(vpaned, orient="horizontal", style="Dark.TPanedwindow")
+        tree_box = tk.Frame(bottom, bg=T["panel"], highlightthickness=1, highlightbackground=T["border"])
+        tk.Label(tree_box, text="ROI LIST", bg=T["panel"], fg=T["text"],
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 4))
+        tree_frame = tk.Frame(tree_box, bg=T["panel"])
+        tree_frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(tree_frame, columns=[c[0] for c in COLUMNS], show="headings",
                                  selectmode="extended", style="Dark.Treeview", height=6)
         for key, text, width in COLUMNS:
@@ -167,12 +178,11 @@ class App:
         self.tree.bind("<Double-1>", lambda _e: self.edit_selected())
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.wall.select(set(self.tree.selection())))
-        nb.add(tree_frame, text="  ROI 목록  ")
-
-        self.feed = db.FeedPanel(nb)          # 에이전트 활동 + 시스템 로그 통합
-        nb.add(self.feed, text="  에이전트 활동 · 시스템 로그  ")
-        self.notebook = nb
-        vpaned.add(nb, weight=1)
+        bottom.add(tree_box, weight=3)
+        self.roi_trend = db.RoiTrendPanel(bottom, on_select=self._select_roi)
+        bottom.add(self.roi_trend, weight=2)
+        vpaned.add(bottom, weight=1)
+        self._bottom = bottom
         self._vpaned = vpaned
         self.root.after(150, self._place_sash)
 
@@ -181,15 +191,49 @@ class App:
                  font=(db.F, 8), padx=14, pady=4).pack(fill="x", side="bottom")
 
     def _place_sash(self, tries: int = 0):
-        """처음 표시될 때 위:아래 = 약 68:32 (하단 탭이 위 영역을 밀어내지 않도록)."""
-        h = self._vpaned.winfo_height()
-        if h < 200 and tries < 20:
+        """처음 표시될 때 위:아래 = 약 66:34, 좌우 경계는 위(카메라 월|로그)와 아래(ROI 목록|모니터링)를 맞춘다."""
+        h, w = self._vpaned.winfo_height(), self._hpaned.winfo_width()
+        if (h < 200 or w < 400) and tries < 20:
             self.root.after(100, lambda: self._place_sash(tries + 1))
             return
         try:
-            self._vpaned.sashpos(0, max(320, int(h * 0.68)))
+            self._vpaned.sashpos(0, max(320, int(h * 0.66)))
+            x = max(300, w - max(380, int(w * 0.36)))
+            self._hpaned.sashpos(0, x)
+            self._bottom.sashpos(0, x)
         except tk.TclError:
             pass
+
+    def reset_wall_layout(self):
+        """카메라 월 카드 배치를 모두 자동 배치로 되돌린다."""
+        if not any(r.wall for r in self.cfg.rois):
+            return
+        for r in self.cfg.rois:
+            r.wall = []
+        self._save_quietly()
+        self.wall.set_rois(self.cfg.rois, self.states, self.monitor is not None)
+        self.wall.select(set(self.tree.selection()))
+        self._sync_thumb_sizes()
+        self.log("info", "카메라 월 배치를 자동 정렬로 되돌렸습니다")
+
+    def _wall_layout_changed(self, roi_id: str, rect: list):
+        roi = self.cfg.find(roi_id)
+        if roi is None:
+            return
+        roi.wall = cfgmod.parse_wall(rect)
+        self._save_quietly()
+        self._sync_thumb_sizes()
+
+    def _sync_thumb_sizes(self):
+        if self.monitor is not None:
+            self.monitor.thumb_sides = self.wall.view_sizes()
+
+    def _save_quietly(self):
+        """화면 배치처럼 검출에 영향 없는 변경 저장 (실패해도 작업을 막지 않음)."""
+        try:
+            cfgmod.save(self.cfg)
+        except OSError as e:
+            self.log("error", f"설정 저장 실패: {e}")
 
     def _select_roi(self, roi_id: str):
         if self.tree.exists(roi_id):
@@ -246,6 +290,7 @@ class App:
             self.tree.selection_set(keep)
         self.wall.set_rois(self.cfg.rois, self.states, self.monitor is not None)
         self.wall.select(set(keep))
+        self._sync_thumb_sizes()
         self.agent.configure(self.cfg.rois)
         self._update_status_bar()
 
@@ -381,6 +426,7 @@ class App:
             return
         dup = copy.deepcopy(roi)
         dup.id = cfgmod.new_roi_id()
+        dup.wall = []
         dup.name = f"{roi.name} 복사본"
         result = roi_dialog.edit_roi(self.root, dup, "ROI 복제")
         if result is not None:
@@ -516,6 +562,7 @@ class App:
         self.alerts.sound_enabled = self.cfg.sound_enabled
         self.monitor = worker.Monitor(self.cfg, self.events, self.teams)
         self.monitor.send_frames = True
+        self._sync_thumb_sizes()
         self._last_status = time.monotonic()
         counts = {r.id: sum(len(paths.reference_paths(r.id, c)) for c in detectors.SAMPLE_CLASSES)
                   for r in self.cfg.rois if r.enabled}

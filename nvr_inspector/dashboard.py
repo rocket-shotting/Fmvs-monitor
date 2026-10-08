@@ -1,4 +1,4 @@
-"""관제센터 대시보드 구성요소 (다크 테마): KPI 타일, 카메라 월, 에이전트 활동 피드, NG 추이 차트."""
+"""관제센터 대시보드 구성요소 (다크 테마): KPI 타일, 카메라 월(자유 배치), 에이전트 활동 피드, NG 추이 차트."""
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk
@@ -7,6 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from PIL import Image, ImageTk
 
 from agent import FEED_KINDS, FeedItem
+from config import WALL_MAX, WALL_MIN
 
 F = "맑은 고딕"
 NUM_FONT = ("Segoe UI", 20, "bold")
@@ -44,6 +45,8 @@ def apply_theme(root: tk.Tk) -> None:
                     font=(F, 9, "bold"), borderwidth=0)
     style.map("Dark.TNotebook.Tab", background=[("selected", T["panel"])], foreground=[("selected", T["accent"])])
     style.configure("Dark.Vertical.TScrollbar", troughcolor=T["bg"], background=T["card"], bordercolor=T["bg"],
+                    arrowcolor=T["muted"], lightcolor=T["card"], darkcolor=T["card"])
+    style.configure("Dark.Horizontal.TScrollbar", troughcolor=T["bg"], background=T["card"], bordercolor=T["bg"],
                     arrowcolor=T["muted"], lightcolor=T["card"], darkcolor=T["card"])
     style.configure("Dark.TPanedwindow", background=T["bg"])
 
@@ -91,17 +94,20 @@ class KpiTile(tk.Frame):
 
 
 class CameraCard(tk.Frame):
-    W, H = 256, 144
+    W, H = 256, 144          # 기본(자동 배치) 화면 크기
 
-    def __init__(self, master, roi_id: str, on_select: Callable, on_open: Callable):
+    def __init__(self, master, roi_id: str):
         super().__init__(master, bg=T["card"], highlightthickness=2, highlightbackground=T["border"])
         self.roi_id = roi_id
         self.state = "idle"
         self.color = STATE_COLORS["idle"]
         self.meta = ""
         self.has_frame = False
+        self.vw, self.vh = self.W, self.H
         self._photo = None
-        self.view = tk.Canvas(self, width=self.W, height=self.H, bg="#05080f", highlightthickness=0)
+        self._rgb = None
+        self._bg = T["card"]
+        self.view = tk.Canvas(self, width=self.vw, height=self.vh, bg="#05080f", highlightthickness=0)
         self.view.pack(padx=6, pady=(6, 4))
         row = tk.Frame(self, bg=T["card"])
         row.pack(fill="x", padx=8)
@@ -109,19 +115,33 @@ class CameraCard(tk.Frame):
         self.name.pack(side="left", fill="x", expand=True)
         self.pill = tk.Label(row, text="대기", bg=self.color, fg="#06101f", font=(F, 8, "bold"), padx=8)
         self.pill.pack(side="right")
-        self.detail = tk.Label(self, text="", bg=T["card"], fg=T["muted"], font=(F, 8), anchor="w",
-                               justify="left", wraplength=self.W)
-        self.detail.pack(fill="x", padx=8, pady=(2, 8))
+        # 상세는 2줄 고정 – 상태 문구 길이에 따라 카드 높이가 바뀌어 옆 카드와 겹치지 않도록
+        self.detail = tk.Label(self, text="", bg=T["card"], fg=T["muted"], font=(F, 8), anchor="nw",
+                               justify="left", wraplength=self.vw, height=2)
+        self.detail.pack(fill="x", padx=8, pady=(2, 10))
         self._row = row
-        for w in (self, self.view, row, self.name, self.pill, self.detail):
-            w.bind("<Button-1>", lambda _e: on_select(roi_id))
-            w.bind("<Double-1>", lambda _e: on_open(roi_id))
+        # 오른쪽 아래 모서리: 끌어서 크기 조절
+        self.grip = tk.Label(self, text="◢", bg=T["card"], fg=T["dim"], font=("Segoe UI", 9),
+                             cursor="size_nw_se", padx=1, pady=0)
+        self.grip.place(relx=1.0, rely=1.0, anchor="se")
+        self.drag_widgets = (self, self.view, row, self.name, self.pill, self.detail)
         self._placeholder()
 
     def set_meta(self, roi):
         self.name.configure(text=roi.name)
         self.meta = f"{roi.detector_label().split(' (')[0]} · {roi.w}×{roi.h}"
         if not self.has_frame:
+            self._placeholder()
+
+    def set_view_size(self, vw: int, vh: int):
+        if (vw, vh) == (self.vw, self.vh):
+            return
+        self.vw, self.vh = vw, vh
+        self.view.configure(width=vw, height=vh)
+        self.detail.configure(wraplength=vw)
+        if self.has_frame and self._rgb is not None:
+            self.set_frame(self._rgb)
+        else:
             self._placeholder()
 
     def set_state(self, state: str, detail: str):
@@ -134,10 +154,14 @@ class CameraCard(tk.Frame):
         self._hud()
 
     def set_frame(self, rgb):
+        self._rgb = rgb
         img = Image.fromarray(rgb)
-        img.thumbnail((self.W, self.H))
-        canvas = Image.new("RGB", (self.W, self.H), (5, 8, 15))
-        canvas.paste(img, ((self.W - img.width) // 2, (self.H - img.height) // 2))
+        scale = min(self.vw / img.width, self.vh / img.height)
+        size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+        if size != img.size:
+            img = img.resize(size, Image.BILINEAR)
+        canvas = Image.new("RGB", (self.vw, self.vh), (5, 8, 15))
+        canvas.paste(img, ((self.vw - img.width) // 2, (self.vh - img.height) // 2))
         self._photo = ImageTk.PhotoImage(canvas)
         self.view.delete("all")
         self.view.create_image(0, 0, anchor="nw", image=self._photo)
@@ -146,32 +170,32 @@ class CameraCard(tk.Frame):
 
     def clear_frame(self):
         self.has_frame = False
-        self._photo = None
+        self._photo = self._rgb = None
         self._placeholder()
 
     def highlight(self, selected: bool):
-        bg = T["card_hi"] if selected else T["card"]
-        for w in (self, self._row, self.name, self.detail):
-            w.configure(bg=bg)
+        self._bg = T["card_hi"] if selected else T["card"]
+        for w in (self, self._row, self.name, self.detail, self.grip):
+            w.configure(bg=self._bg)
 
     def blink(self, on: bool):
         if self.state == "alarm":
             self.configure(highlightbackground=T["red"] if on else "#7f1d1d")
 
     def _placeholder(self):
-        v = self.view
+        v, w, h = self.view, self.vw, self.vh
         v.delete("all")
-        for x in range(0, self.W, 16):
-            v.create_line(x, 0, x, self.H, fill="#0c1426")
-        for y in range(0, self.H, 16):
-            v.create_line(0, y, self.W, y, fill="#0c1426")
-        v.create_text(self.W // 2, self.H // 2 - 8, text="STANDBY", fill=T["dim"], font=("Segoe UI", 14, "bold"))
-        v.create_text(self.W // 2, self.H // 2 + 14, text=self.meta, fill=T["dim"], font=(F, 8))
+        for x in range(0, w, 16):
+            v.create_line(x, 0, x, h, fill="#0c1426")
+        for y in range(0, h, 16):
+            v.create_line(0, y, w, y, fill="#0c1426")
+        v.create_text(w // 2, h // 2 - 8, text="STANDBY", fill=T["dim"], font=("Segoe UI", 14, "bold"))
+        v.create_text(w // 2, h // 2 + 14, text=self.meta, fill=T["dim"], font=(F, 8))
         self._hud()
 
     def _hud(self):
         """HUD 스타일 모서리 표시 + LIVE 표시."""
-        v, c, n, w, h = self.view, self.color, 16, self.W - 2, self.H - 2
+        v, c, n, w, h = self.view, self.color, 16, self.vw - 2, self.vh - 2
         v.delete("hud")
         for x, y, dx, dy in ((2, 2, 1, 1), (w, 2, -1, 1), (2, h, 1, -1), (w, h, -1, -1)):
             v.create_line(x, y, x + dx * n, y, fill=c, width=2, tags="hud")
@@ -183,57 +207,113 @@ class CameraCard(tk.Frame):
 
 
 class CameraWall(tk.Frame):
-    GAP = 8
+    """ROI 카드를 자유롭게 배치하는 카메라 월.
 
-    def __init__(self, master, on_select: Callable, on_open: Callable):
+    - 카드를 끌면 이동, 오른쪽 아래 ◢를 끌면 화면 크기 조절 (8px 격자에 맞춤)
+    - 직접 배치한 카드는 on_layout(roi_id, [x, y, 폭, 높이])로 저장되고, 나머지는 빈 자리에 자동 배치
+    - 클릭: 선택, 더블클릭: 편집"""
+    GAP = 12
+    SNAP = 8
+    DRAG_START = 5            # 이 거리(px) 이상 움직여야 끌기로 본다 (클릭과 구분)
+
+    def __init__(self, master, on_select: Callable, on_open: Callable,
+                 on_layout: Optional[Callable] = None):
         super().__init__(master, bg=T["bg"])
-        self.on_select, self.on_open = on_select, on_open
+        self.on_select, self.on_open, self.on_layout = on_select, on_open, on_layout
         self.canvas = tk.Canvas(self, bg=T["bg"], highlightthickness=0)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview, style="Dark.Vertical.TScrollbar")
-        self.canvas.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview,
+                            style="Dark.Horizontal.TScrollbar")
+        self.canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        hsb.pack(side="bottom", fill="x")
         vsb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.inner = tk.Frame(self.canvas, bg=T["bg"])
-        self._win = self.canvas.create_window(0, 0, window=self.inner, anchor="n")
-        self.inner.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._on_resize)
         self.canvas.bind("<Enter>", lambda _e: self.canvas.bind_all("<MouseWheel>", self._on_wheel))
         self.canvas.bind("<Leave>", lambda _e: self.canvas.unbind_all("<MouseWheel>"))
         self.cards: Dict[str, CameraCard] = {}
+        self.items: Dict[str, int] = {}
+        self.manual: Dict[str, list] = {}     # roi_id -> [x, y, 폭, 높이] (직접 배치)
         self.order: List[str] = []
         self._cols = 0
-        self.empty = tk.Label(self.inner, text="등록된 ROI가 없습니다\n상단의 [＋ ROI 추가]로 감시할 카메라 영역을 지정하세요",
-                              bg=T["bg"], fg=T["muted"], font=(F, 11), justify="center")
+        self._width = 0
+        self._drag: Optional[dict] = None
+        self.empty = self.canvas.create_text(
+            0, 0, text="등록된 ROI가 없습니다\n상단의 [＋ ROI 추가]로 감시할 카메라 영역을 지정하세요",
+            fill=T["muted"], font=(F, 11), justify="center", state="hidden")
 
+    # ---------- 배치 ----------
     def _on_wheel(self, e):
         self.canvas.yview_scroll(int(-e.delta / 120), "units")
 
     def _on_resize(self, e):
-        self.canvas.coords(self._win, e.width // 2, 0)       # 카드 묶음을 가운데 정렬
-        cols = max(1, e.width // (CameraCard.W + 16 + self.GAP * 2))
-        if cols != self._cols:
-            self._cols = cols
+        if e.width != self._width:
+            self._width = e.width
             self._layout()
 
+    def _card_size(self, card: CameraCard) -> Tuple[int, int]:
+        return card.winfo_reqwidth(), card.winfo_reqheight()
+
     def _layout(self):
-        cols = max(1, self._cols)
-        for w in self.inner.grid_slaves():
-            w.grid_forget()
+        """직접 배치한 카드는 저장된 위치에, 나머지는 겹치지 않는 빈 칸에 왼쪽 위부터 채운다."""
+        self.canvas.itemconfigure(self.empty, state="hidden" if self.order else "normal")
         if not self.order:
-            self.empty.grid(row=0, column=0, padx=40, pady=80)
+            self.canvas.coords(self.empty, max(200, self._width // 2), 100)
+            self._update_scroll()
             return
-        for i, rid in enumerate(self.order):
-            self.cards[rid].grid(row=i // cols, column=i % cols, padx=self.GAP, pady=self.GAP, sticky="n")
+        self.update_idletasks()
+        taken = []
+        for rid in self.order:
+            if rid in self.manual:
+                x, y, _w, _h = self.manual[rid]
+                card = self.cards[rid]
+                cw, ch = self._card_size(card)
+                self.canvas.coords(self.items[rid], x, y)
+                taken.append((x, y, cw, ch))
+        auto = [rid for rid in self.order if rid not in self.manual]
+        if auto:
+            cw, ch = self._card_size(self.cards[auto[0]])
+            cell_w, cell_h = cw + self.GAP, ch + self.GAP
+            width = max(self._width, cell_w + self.GAP)
+            cols = self._cols = max(1, (width - self.GAP) // cell_w)
+            # 직접 배치한 카드가 없으면 카드 묶음을 가운데 정렬
+            used = min(cols, len(auto))
+            x0 = self.GAP if taken else max(self.GAP, (width - used * cell_w + self.GAP) // 2)
+            slot = 0
+            for rid in auto:
+                while True:
+                    x = x0 + (slot % cols) * cell_w
+                    y = self.GAP + (slot // cols) * cell_h
+                    slot += 1
+                    if not any(_overlap((x, y, cw, ch), r) for r in taken):
+                        break
+                self.canvas.coords(self.items[rid], x, y)
+                taken.append((x, y, cw, ch))
+        self._update_scroll()
+
+    def _update_scroll(self):
+        box = self.canvas.bbox("all") or (0, 0, 1, 1)
+        self.canvas.configure(scrollregion=(0, 0, box[2] + self.GAP, box[3] + self.GAP))
 
     def set_rois(self, rois, states: Dict[str, Tuple[str, str]], running: bool):
         ids = [r.id for r in rois]
         for rid in list(self.cards):
             if rid not in ids:
                 self.cards.pop(rid).destroy()
+                self.canvas.delete(self.items.pop(rid))
+        self.manual = {}
         for r in rois:
             card = self.cards.get(r.id)
             if card is None:
-                card = self.cards[r.id] = CameraCard(self.inner, r.id, self.on_select, self.on_open)
+                card = self.cards[r.id] = CameraCard(self.canvas, r.id)
+                self.items[r.id] = self.canvas.create_window(0, 0, window=card, anchor="nw")
+                self._bind_card(card)
+            wall = list(getattr(r, "wall", None) or [])
+            if len(wall) == 4:
+                self.manual[r.id] = wall
+                card.set_view_size(wall[2], wall[3])
+            else:
+                card.set_view_size(CameraCard.W, CameraCard.H)
             card.set_meta(r)
             if not r.enabled:
                 card.set_state("off", "사용 안 함")
@@ -246,6 +326,64 @@ class CameraWall(tk.Frame):
         self.order = ids
         self._layout()
 
+    def view_sizes(self) -> Dict[str, int]:
+        """ROI별 카드 화면의 긴 변 (썸네일 해상도 결정용)."""
+        return {rid: max(card.vw, card.vh) for rid, card in self.cards.items()}
+
+    # ---------- 끌어서 이동 / 크기 조절 ----------
+    def _bind_card(self, card: CameraCard):
+        rid = card.roi_id
+        for w in card.drag_widgets:
+            w.bind("<ButtonPress-1>", lambda e, r=rid: self._press(r, e, "move"))
+            w.bind("<B1-Motion>", self._motion)
+            w.bind("<ButtonRelease-1>", self._release)
+            w.bind("<Double-1>", lambda _e, r=rid: self.on_open(r))
+        card.grip.bind("<ButtonPress-1>", lambda e, r=rid: self._press(r, e, "resize"))
+        card.grip.bind("<B1-Motion>", self._motion)
+        card.grip.bind("<ButtonRelease-1>", self._release)
+
+    def _press(self, rid: str, e, mode: str):
+        card = self.cards[rid]
+        x, y = self.canvas.coords(self.items[rid])
+        self._drag = {"rid": rid, "mode": mode, "x0": e.x_root, "y0": e.y_root, "pos": (x, y),
+                      "size": (card.vw, card.vh), "moved": False}
+        card.lift()
+
+    def _motion(self, e):
+        d = self._drag
+        if d is None:
+            return
+        dx, dy = e.x_root - d["x0"], e.y_root - d["y0"]
+        if not d["moved"] and abs(dx) < self.DRAG_START and abs(dy) < self.DRAG_START:
+            return
+        d["moved"] = True
+        card = self.cards[d["rid"]]
+        if d["mode"] == "move":
+            x = max(0, _snap(d["pos"][0] + dx, self.SNAP))
+            y = max(0, _snap(d["pos"][1] + dy, self.SNAP))
+            self.canvas.coords(self.items[d["rid"]], x, y)
+        else:
+            vw = min(WALL_MAX[0], max(WALL_MIN[0], _snap(d["size"][0] + dx, self.SNAP)))
+            vh = min(WALL_MAX[1], max(WALL_MIN[1], _snap(d["size"][1] + dy, self.SNAP)))
+            card.set_view_size(vw, vh)
+
+    def _release(self, _e):
+        d, self._drag = self._drag, None
+        if d is None:
+            return
+        rid = d["rid"]
+        if not d["moved"]:
+            if d["mode"] == "move":
+                self.on_select(rid)
+            return
+        card = self.cards[rid]
+        x, y = (int(v) for v in self.canvas.coords(self.items[rid]))
+        self.manual[rid] = [x, y, card.vw, card.vh]
+        self._layout()                       # 자동 배치 카드가 새 자리를 피하도록
+        if self.on_layout:
+            self.on_layout(rid, list(self.manual[rid]))
+
+    # ---------- 상태 ----------
     def update_state(self, roi_id: str, state: str, detail: str):
         card = self.cards.get(roi_id)
         if card is not None:
@@ -263,6 +401,16 @@ class CameraWall(tk.Frame):
     def blink(self, on: bool):
         for card in self.cards.values():
             card.blink(on)
+
+
+def _snap(v: float, step: int) -> int:
+    return int(round(v / step)) * step
+
+
+def _overlap(a, b) -> bool:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
 
 
 class FeedPanel(tk.Frame):
@@ -344,7 +492,7 @@ def draw_roi_rows(canvas: tk.Canvas, trends, x0: int, y0: int, width: int, row_h
 
 
 class RoiTrendPanel(tk.Canvas):
-    """ROI별 NG 추이 (최근 12시간, 시간대별) – 메인 화면 오른쪽."""
+    """ROI별 NG 추이 (최근 12시간, 시간대별) – 메인 화면 오른쪽 아래."""
     ROW_H = 30
 
     def __init__(self, master, on_select: Optional[Callable] = None):

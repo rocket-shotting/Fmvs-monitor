@@ -619,6 +619,22 @@ class WorkerFlowTests(unittest.TestCase):
         self.assertEqual(events[0][2], "off")
 
 
+class WallLayoutTests(unittest.TestCase):
+    def test_parse_wall(self):
+        self.assertEqual(config.parse_wall([10, 20, 400, 300]), [10, 20, 400, 300])
+        self.assertEqual(config.parse_wall([-5, 3.6, 10, 99999]), [0, 4, config.WALL_MIN[0], config.WALL_MAX[1]])
+        for bad in (None, [], [1, 2, 3], "x", [1, 2, "a", 4]):
+            self.assertEqual(config.parse_wall(bad), [])
+
+    def test_roundtrip_and_signature(self):
+        roi = config.ROI(name="A", wall=[8, 16, 320, 180])
+        back = config.roi_from_dict(json.loads(json.dumps(config.asdict(roi))))
+        self.assertEqual(back.wall, [8, 16, 320, 180])
+        moved = config.roi_from_dict(dict(config.asdict(roi), wall=[100, 100, 400, 240]))
+        self.assertEqual(moved.signature(), back.signature())     # 카드 배치는 판정 상태를 초기화하지 않음
+        self.assertEqual(config.roi_from_dict({"name": "old"}).wall, [])
+
+
 def occlusion_window(process, rect, own=False):
     return mock.Mock(process=process, rect=rect, own=own)
 

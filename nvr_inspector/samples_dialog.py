@@ -2,11 +2,12 @@
 
 - OK/NG 이미지 매칭: OK·NG·무시 3종류
 - 형상 검사 / 기준 화면과 다름: 기준(정상) 이미지
-현재 화면에서 추가하거나, 파일(예: 과거 NG 사진)에서 가져와 ROI 크기에 맞춰 저장한다."""
+현재 화면에서 추가하거나, 파일(예: 과거 NG 사진)에서 가져와 ROI 크기에 맞춰 저장한다.
+잘못 등록한 이미지는 다른 칸(OK/NG/무시)으로 끌어 놓거나 우클릭 메뉴로 옮길 수 있다."""
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PIL import Image, ImageTk
 
@@ -30,6 +31,7 @@ class SamplesDialog:
                         "skip": "무시 (셀 없음·이동 중·가려짐 – 판정하지 않을 화면)"}
         self._photos: List[ImageTk.PhotoImage] = []
         self.sections: Dict[str, dict] = {}
+        self._drag: Optional[dict] = None
 
         top = self.top = tk.Toplevel(master)
         top.title(f"샘플 이미지 – {roi.name}  (ROI {roi.w}×{roi.h})")
@@ -40,7 +42,8 @@ class SamplesDialog:
 
         hint = ("현재 화면 또는 파일(과거 NG 사진 등)에서 이미지를 등록합니다. 파일은 ROI 크기에 맞춰 저장됩니다.\n"
                 "· OK: 정상 제품 (위치·모양 편차가 있으면 여러 장)   · NG: 불량 제품 (접힘·찍힘·휨 등 유형별로)\n"
-                "· 무시: 셀이 없을 때·이동 중·가려진 화면 – 이것과 비슷하면 판정하지 않습니다 (빈 화면 오탐 방지)")
+                "· 무시: 셀이 없을 때·이동 중·가려진 화면 – 이것과 비슷하면 판정하지 않습니다 (빈 화면 오탐 방지)\n"
+                "· 잘못 등록했으면 이미지를 다른 칸으로 끌어 놓거나, 우클릭 → 이동")
         ttk.Label(body, text=hint, foreground="#555555", justify="left").pack(fill="x", pady=(0, 6))
 
         for cls, label in self.classes.items():
@@ -74,7 +77,7 @@ class SamplesDialog:
         strip = ttk.Frame(canvas)
         canvas.create_window(0, 0, window=strip, anchor="nw")
         strip.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        self.sections[cls] = {"count": count, "strip": strip}
+        self.sections[cls] = {"count": count, "strip": strip, "box": box, "canvas": canvas}
 
     def _refresh(self):
         self._photos.clear()
@@ -86,13 +89,14 @@ class SamplesDialog:
             if not files:
                 ttk.Label(sec["strip"], text="등록된 이미지 없음", foreground="#999999").pack(padx=8, pady=30)
             for path in files:
-                self._add_thumb(sec["strip"], path)
+                self._add_thumb(sec["strip"], path, cls)
         self._update_calibration()
 
-    def _add_thumb(self, strip, path: str):
+    def _add_thumb(self, strip, path: str, cls: str):
         cell = ttk.Frame(strip, padding=3)
         cell.pack(side="left", anchor="n")
         size_ok = False
+        photo = None
         try:
             with Image.open(path) as img:
                 thumb = img.convert("RGB")
@@ -100,13 +104,100 @@ class SamplesDialog:
             thumb.thumbnail(_THUMB)
             photo = ImageTk.PhotoImage(thumb)
             self._photos.append(photo)
-            tk.Label(cell, image=photo, borderwidth=1, relief="solid").pack()
+            pic = tk.Label(cell, image=photo, borderwidth=1, relief="solid", cursor="fleur")
         except Exception:
-            ttk.Label(cell, text="(열 수 없음)").pack()
+            pic = ttk.Label(cell, text="(열 수 없음)", cursor="fleur")
+        pic.pack()
+        pic.bind("<ButtonPress-1>", lambda e: self._drag_start(e, path, cls, photo))
+        pic.bind("<B1-Motion>", self._drag_move)
+        pic.bind("<ButtonRelease-1>", self._drag_end)
+        pic.bind("<Button-3>", lambda e: self._context_menu(e, path, cls))
         name = os.path.basename(path)
         ttk.Label(cell, text=name if size_ok else f"⚠ ROI와 크기 다름\n{name}",
                   foreground="#555555" if size_ok else "#b71c1c", font=("맑은 고딕", 8)).pack()
         ttk.Button(cell, text="삭제", width=6, command=lambda: self._delete_one(path)).pack()
+
+    # ---------- 다른 칸으로 옮기기 (끌어 놓기 / 우클릭) ----------
+    def _drag_start(self, e, path: str, cls: str, photo):
+        self._drag = {"path": path, "cls": cls, "photo": photo, "x0": e.x_root, "y0": e.y_root,
+                      "ghost": None, "target": None}
+
+    def _drag_move(self, e):
+        d = self._drag
+        if d is None:
+            return
+        if d["ghost"] is None:
+            if abs(e.x_root - d["x0"]) < 6 and abs(e.y_root - d["y0"]) < 6:
+                return
+            ghost = d["ghost"] = tk.Toplevel(self.top)
+            ghost.overrideredirect(True)
+            ghost.attributes("-topmost", True)
+            try:
+                ghost.attributes("-alpha", 0.75)
+            except tk.TclError:
+                pass
+            if d["photo"] is not None:
+                tk.Label(ghost, image=d["photo"], borderwidth=2, relief="solid").pack()
+            else:
+                tk.Label(ghost, text="이미지", padx=10, pady=10).pack()
+        d["ghost"].geometry(f"+{e.x_root + 12}+{e.y_root + 12}")
+        target = self._section_at(e.x_root, e.y_root)
+        if target != d["target"]:
+            d["target"] = target
+            self._show_drop_hint(target if target != d["cls"] else None)
+
+    def _drag_end(self, e):
+        d, self._drag = self._drag, None
+        if d is None:
+            return
+        self._show_drop_hint(None)
+        if d["ghost"] is None:
+            return
+        d["ghost"].destroy()
+        target = self._section_at(e.x_root, e.y_root)
+        if target and target != d["cls"]:
+            self._move(d["path"], target)
+
+    def _section_at(self, x: int, y: int) -> Optional[str]:
+        widget = self.top.winfo_containing(x, y)
+        if widget is None:
+            return None
+        name = str(widget)
+        for cls, sec in self.sections.items():
+            box = str(sec["box"])
+            if name == box or name.startswith(box + "."):
+                return cls
+        return None
+
+    def _show_drop_hint(self, target: Optional[str]):
+        for cls, sec in self.sections.items():
+            n = len(paths.reference_paths(self.roi.id, cls))
+            if cls == target:
+                sec["count"].configure(text=f"{n}장   ⬇ 여기에 놓으면 '{self.classes[cls].split(' (')[0]}'(으)로 이동",
+                                       foreground="#b71c1c")
+            else:
+                sec["count"].configure(text=f"{n}장", foreground="")
+
+    def _context_menu(self, e, path: str, cls: str):
+        menu = tk.Menu(self.top, tearoff=False)
+        for target, label in self.classes.items():
+            if target != cls:
+                menu.add_command(label=f"→ {label.split(' (')[0]}(으)로 이동",
+                                 command=lambda t=target: self._move(path, t))
+        menu.add_separator()
+        menu.add_command(label="삭제", command=lambda: self._delete_one(path))
+        try:
+            menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            menu.grab_release()
+
+    def _move(self, path: str, target: str):
+        """샘플 이미지를 다른 분류(OK/NG/무시)로 옮긴다 (파일 이름만 바뀌고 이미지는 그대로)."""
+        try:
+            os.replace(path, paths.new_reference_path(self.roi.id, target))
+        except OSError as e:
+            messagebox.showerror("이동 실패", str(e), parent=self.top)
+        self._refresh()
 
     def _update_calibration(self):
         samples = worker.load_samples(self.roi.id)

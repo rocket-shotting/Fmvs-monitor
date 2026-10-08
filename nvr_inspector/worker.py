@@ -119,6 +119,7 @@ class Monitor(threading.Thread):
         self._windows = None                 # 이번 주기 화면 창 목록 (가림 판정용)
         self._union = None                   # (x0, y0, 전체 캡처) – 한 번에 캡처한 화면
         self.send_frames = False             # 대시보드 썸네일 전송 여부
+        self.thumb_sides: Dict[str, int] = {}  # ROI별 썸네일 최대 변 길이 (카메라 월 카드 크기)
 
     # ---- GUI에서 호출 ----
     def update_config(self, cfg: AppConfig) -> None:
@@ -292,7 +293,8 @@ class Monitor(threading.Thread):
         if now - rt.last_frame_sent < THUMB_INTERVAL:
             return
         rt.last_frame_sent = now
-        step = max(1, -(-max(frame.shape[:2]) // THUMB_MAX_SIDE))
+        side = max(64, self.thumb_sides.get(roi.id, THUMB_MAX_SIDE))
+        step = max(1, -(-max(frame.shape[:2]) // side))
         self._emit("frame", roi.id, np.ascontiguousarray(frame[::step, ::step]))
 
     def _check_on_stop(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, frame: np.ndarray) -> None:

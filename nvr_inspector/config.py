@@ -43,6 +43,7 @@ class ROI:
     still_only: bool = False           # 대상이 움직이는 동안은 판정하지 않고, 정지한 순간 1회만 판정
     still_diff: float = 3.0            # 이 값 이하의 화면 변화량이면 '정지'로 본다 (밝기 0~255 평균 차)
     still_frames: int = 2              # 연속 몇 번 변화가 없어야 정지로 확정할지
+    wall: list = field(default_factory=list)   # 카메라 월 카드 배치 [x, y, 화면 폭, 화면 높이], 비우면 자동 배치
 
     def center(self):
         return self.x + self.w // 2, self.y + self.h // 2
@@ -126,7 +127,23 @@ def roi_from_dict(d: dict) -> ROI:
     roi.still_only = bool(d.get("still_only", False))
     roi.still_diff = _to_float(d.get("still_diff"), 3.0, 0.1, 255.0)
     roi.still_frames = max(1, min(20, _to_int(d.get("still_frames"), 2)))
+    roi.wall = parse_wall(d.get("wall"))
     return roi
+
+
+WALL_MIN = (160, 90)
+WALL_MAX = (1280, 960)
+
+
+def parse_wall(value) -> list:
+    """카메라 월 배치 값 검증. 잘못된 값이면 [] (자동 배치)."""
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return []
+    try:
+        x, y, w, h = (int(round(float(v))) for v in value)
+    except (TypeError, ValueError):
+        return []
+    return [max(0, x), max(0, y), max(WALL_MIN[0], min(WALL_MAX[0], w)), max(WALL_MIN[1], min(WALL_MAX[1], h))]
 
 
 def config_from_dict(d: dict) -> AppConfig:

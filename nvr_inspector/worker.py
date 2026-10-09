@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 import detectors
+import geometry
 import notifier
 import occlusion
 import paths
@@ -175,8 +176,9 @@ class Monitor(threading.Thread):
         rois = [r for r in cfg.rois if r.enabled]
         if len(rois) < _UNION_MIN_ROIS:
             return
-        x0, y0 = min(r.x for r in rois), min(r.y for r in rois)
-        x1, y1 = max(r.x + r.w for r in rois), max(r.y + r.h for r in rois)
+        boxes = [geometry.capture_rect(r) for r in rois]
+        x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+        x1, y1 = max(b[0] + b[2] for b in boxes), max(b[1] + b[3] for b in boxes)
         if (x1 - x0) * (y1 - y0) > _UNION_MAX_PIXELS:
             return
         try:
@@ -185,12 +187,13 @@ class Monitor(threading.Thread):
             log.warning("전체 영역 캡처 실패, ROI별 캡처로 진행: %s", e)
 
     def _grab(self, roi: ROI, grabber: Grabber) -> np.ndarray:
+        """ROI 모양을 바로 세운 (h, w, 3) 화면 – 회전·타원은 geometry가 변환."""
         if self._union is not None:
             x0, y0, big = self._union
-            frame = big[roi.y - y0:roi.y - y0 + roi.h, roi.x - x0:roi.x - x0 + roi.w]
-            if frame.shape[:2] == (roi.h, roi.w):
-                return frame
-        return grabber.grab(roi.x, roi.y, roi.w, roi.h)
+            bx, by, bw, bh = geometry.capture_rect(roi)
+            if bx >= x0 and by >= y0 and bx + bw <= x0 + big.shape[1] and by + bh <= y0 + big.shape[0]:
+                return geometry.extract(roi, big, (x0, y0))
+        return geometry.grab(grabber, roi)
 
     def _tick(self, cfg: AppConfig, grabber: Grabber) -> None:
         alive = set()
@@ -253,7 +256,9 @@ class Monitor(threading.Thread):
             if proc and proc.lower() == roi.expected_process.lower():
                 return occlusion.Visibility(True, "")
             return occlusion.Visibility(False, tr("다른 화면: {proc}", proc=proc or tr("확인 불가(화면 잠금 등)")))
-        return occlusion.roi_visibility((roi.x, roi.y, roi.w, roi.h), self._windows, roi.expected_process)
+        return occlusion.roi_visibility(geometry.capture_rect(roi), self._windows, roi.expected_process,
+                                        inside=None if geometry.is_plain(roi) else
+                                        (lambda xs, ys, r=roi: geometry.contains(r, xs, ys)))
 
     def _check(self, cfg: AppConfig, roi: ROI, rt: RoiRuntime, grabber: Grabber) -> None:
         # 1) ROI 위치에 지정한 프로그램(NVR)이 보이는지 확인. 다른 창이 덮고 있으면 판정하지 않는다.

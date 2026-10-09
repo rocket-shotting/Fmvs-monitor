@@ -18,6 +18,7 @@ import alert
 import config as cfgmod
 import dashboard as db
 import detectors
+import geometry
 import housekeeping
 import llm
 import notifier
@@ -344,7 +345,7 @@ class App:
             kind += (tr(" · OK{ok}/NG{ng}/무시{skip}", ok=n["ok"], ng=n["ng"], skip=n["skip"]) if n["ok"]
                      else tr(" · 기준 없음"))
         return ("✔" if roi.enabled else "–", roi.name, kind,
-                f"{roi.x},{roi.y}  {roi.w}×{roi.h}", roi.assignee or "-",
+                geometry.describe(roi), roi.assignee or "-",
                 tr(STATE_TEXT.get(state, state)), detail), state
 
     def _refresh_tree(self):
@@ -398,9 +399,9 @@ class App:
             self.log("info", message)
 
     # ================= ROI 조작 =================
-    def _select_on_screen(self, existing, single):
-        """메인 창을 숨기고 화면을 캡처한 뒤 오버레이에서 ROI를 그린다.
-        반환: (사각형 목록 또는 None, 각 사각형 중심의 프로그램 이름 목록)"""
+    def _select_on_screen(self, existing, single, initial=None):
+        """메인 창을 숨기고 화면을 캡처한 뒤 오버레이에서 ROI를 그린다 (모양·각도 포함).
+        반환: (Region 목록 또는 None, 각 영역 중심의 프로그램 이름 목록)"""
         try:
             self.overlay.hide()
             self.root.withdraw()
@@ -408,13 +409,14 @@ class App:
             time.sleep(0.4)
             with Grabber() as g:
                 image, left, top = g.grab_virtual_screen()
-            rects = roi_editor.select_regions(self.root, image, left, top, existing=existing, single=single)
+            regions = roi_editor.select_regions(self.root, image, left, top, existing=existing, single=single,
+                                                initial=initial)
             processes = []
-            if rects:
+            if regions:
                 self.root.update()
                 time.sleep(0.3)   # 오버레이가 사라진 뒤 실제 창 기준으로 프로그램 확인
-                processes = [winutil.process_name_at(x + w // 2, y + h // 2) for x, y, w, h in rects]
-            return rects, processes
+                processes = [winutil.process_name_at(r.x + r.w // 2, r.y + r.h // 2) for r in regions]
+            return regions, processes
         finally:
             self.root.deiconify()
             self.root.lift()
@@ -431,8 +433,9 @@ class App:
             return
         added = 0
         base = len(self.cfg.rois)
-        for i, ((x, y, w, h), proc) in enumerate(zip(rects, processes), 1):
-            roi = ROI(name=f"ROI {base + i}", x=x, y=y, w=w, h=h, expected_process=proc or "")
+        for i, (reg, proc) in enumerate(zip(rects, processes), 1):
+            roi = ROI(name=f"ROI {base + i}", x=reg.x, y=reg.y, w=reg.w, h=reg.h, shape=reg.shape, angle=reg.angle,
+                      expected_process=proc or "")
             result = roi_dialog.edit_roi(self.root, roi, tr("새 ROI 설정 ({i}/{total}) – 취소하면 이 ROI는 추가하지 않음",
                                                                     i=i, total=len(rects)))
             if result is None:
@@ -453,6 +456,7 @@ class App:
         if (result.w, result.h) != (roi.w, roi.h):
             n = worker.resize_samples(roi.id, result.w, result.h)   # 샘플은 지우지 않고 새 크기에 맞춤
             note = tr(" · 크기 변경 → 샘플 {n}장 새 크기로 유지", n=n) if n else ""
+        note += self._shape_note(roi, result.shape)
         self.cfg.rois[self.cfg.rois.index(roi)] = result
         self._commit(tr("[{name}] 설정 변경{note}", name=result.name, note=note))
 
@@ -462,14 +466,15 @@ class App:
             return
         try:
             others = [r for r in self.cfg.rois if r.id != roi.id]
-            rects, processes = self._select_on_screen(others, single=True)
+            current = roi_editor.Region(roi.x, roi.y, roi.w, roi.h, roi.shape, roi.angle)
+            rects, processes = self._select_on_screen(others, single=True, initial=current)
         except Exception as e:
             log.exception("ROI 위치 지정 실패")
             messagebox.showerror(tr("오류"), tr("화면 캡처/ROI 지정 실패: {e}", e=e), parent=self.root)
             return
         if not rects:
             return
-        nx, ny, nw, nh = rects[0]
+        nx, ny, nw, nh = rects[0].rect
         note = ""
         if (nw, nh) != (roi.w, roi.h):
             keep = messagebox.askyesnocancel(
@@ -486,10 +491,19 @@ class App:
                 n = worker.resize_samples(roi.id, nw, nh)
                 note = tr(" · 샘플 {n}장 새 크기로 유지", n=n) if n else ""
         roi.x, roi.y, roi.w, roi.h = nx, ny, nw, nh
+        note += self._shape_note(roi, rects[0].shape)
+        roi.shape, roi.angle = rects[0].shape, rects[0].angle
         if processes and processes[0] and not roi.expected_process:
             roi.expected_process = processes[0]
         self._commit(tr("[{name}] 위치 변경: {x},{y} {w}×{h} (샘플/기준 이미지 유지){note}",
                         name=roi.name, x=roi.x, y=roi.y, w=roi.w, h=roi.h, note=note))
+
+    @staticmethod
+    def _shape_note(roi, new_shape: str) -> str:
+        """모양(사각형↔타원)이 바뀌면 샘플 모서리 처리가 달라지므로 재등록을 권한다."""
+        if new_shape == roi.shape or not any(paths.reference_paths(roi.id, c) for c in detectors.SAMPLE_CLASSES):
+            return ""
+        return tr(" · 모양 변경 → 샘플/기준 이미지 다시 등록 권장")
 
     def duplicate_selected(self):
         roi = self._one_selected()
@@ -501,7 +515,8 @@ class App:
         dup.name = tr("{name} 복사본", name=roi.name)
         result = roi_dialog.edit_roi(self.root, dup, tr("ROI 복제"))
         if result is not None:
-            if (result.x, result.y, result.w, result.h) == (roi.x, roi.y, roi.w, roi.h):
+            if (result.x, result.y, result.w, result.h, result.angle, result.shape) == \
+                    (roi.x, roi.y, roi.w, roi.h, roi.angle, roi.shape):
                 for cls in detectors.SAMPLE_CLASSES:     # 같은 위치면 샘플/기준 이미지도 복사
                     for src in paths.reference_paths(roi.id, cls):
                         shutil.copyfile(src, paths.new_reference_path(result.id, cls))
@@ -661,7 +676,7 @@ class App:
 
     def _popup_avoid_rects(self):
         """탐지 팝업이 가리면 안 되는 영역: 감시 중인 ROI + 미니 모니터."""
-        rects = [(r.x, r.y, r.w, r.h) for r in self.cfg.rois if r.enabled]
+        rects = [geometry.capture_rect(r) for r in self.cfg.rois if r.enabled]
         mini = self.mini.rect() if hasattr(self, "mini") else None
         if mini:
             rects.append(mini)
@@ -678,7 +693,7 @@ class App:
         try:
             if self.monitor is not None and self.cfg.mini_monitor:
                 self.mini.show(self.agent.roi_trends([r for r in self.cfg.rois if r.enabled]),
-                               self.cfg.mini_position, [(r.x, r.y, r.w, r.h) for r in self.cfg.rois if r.enabled])
+                               self.cfg.mini_position, [geometry.capture_rect(r) for r in self.cfg.rois if r.enabled])
             else:
                 self.mini.hide()
         except tk.TclError:

@@ -217,6 +217,9 @@ def main():
     # ---- 화면 언어 전환: 영어로 모든 창을 열어 보고 다시 한국어로 ----
     language_check(app, roi)
 
+    # ---- ROI 모양·회전: 편집기·설정 창·화면 표시·캡처 ----
+    shape_check(app)
+
     # ---- 의견 에이전트: 분석 → 의견 카드, LLM 없이 질문, 가짜 로컬 LLM 서버로 질문 ----
     advisor_check(app, roi)
 
@@ -557,6 +560,67 @@ def capture_previews(app, out):
     root.attributes("-topmost", False)
     print("영어 대시보드 캡처 완료")
     app.set_language("ko")
+
+
+def shape_check(app):
+    import geometry
+    import roi_editor
+    from capture import Grabber
+    from PIL import Image
+    root = app.root
+    other = config.ROI(name="기존 타원", x=500, y=300, w=160, h=90, shape="ellipse", angle=30)
+    img = Image.new("RGB", (root.winfo_screenwidth(), root.winfo_screenheight()), (30, 30, 40))
+    sel = roi_editor.RegionSelector(root, img, 0, 0, existing=[other], single=False)
+    root.update()
+    sel.add_region(100, 120, 200, 80)                    # 사각형
+    sel.rotate_by(10)
+    sel.rotate_by(-25)
+    assert sel.regions[0]["angle"] == 345.0, sel.regions[0]["angle"]
+    sel.set_mode("ellipse")
+    sel.add_region(400, 500, 120, 120)                   # 원
+    cx, cy = 460, 560
+    sel.rotate_to_point(cx + 100, cy, snap=15)           # 오른쪽 = 90°
+    assert sel.regions[1]["angle"] == 90.0, sel.regions[1]["angle"]
+    assert sel._hit(460, 560) == 1 and sel._hit(5, 5) is None
+    sel._finish()
+    res = sel.result
+    assert [(r.shape, r.angle) for r in res] == [("rect", 345.0), ("ellipse", 90.0)], res
+    # 1개 모드: 기존 ROI를 불러와 새로 그리면 대신하되 각도는 유지
+    sel = roi_editor.RegionSelector(root, img, 0, 0, single=True,
+                                    initial=roi_editor.Region(50, 60, 100, 50, "ellipse", 20.0))
+    root.update()
+    sel.add_region(300, 300, 80, 40)
+    sel._finish()
+    assert len(sel.result) == 1 and sel.result[0].angle == 20.0 and sel.result[0].shape == "ellipse", sel.result
+
+    # 설정 창: 모양·각도 입력
+    roi = config.ROI(name="타원", x=200, y=200, w=120, h=80, shape="ellipse", angle=15)
+    dlg = roi_dialog.RoiDialog(root, roi, "ROI")
+    collected = dlg._collect()
+    assert (collected.shape, collected.angle) == ("ellipse", 15.0)
+    dlg.v_angle.set("-30")
+    dlg.v_shape.set(i18n_tr("사각형"))
+    collected = dlg._collect()
+    assert (collected.shape, collected.angle) == ("rect", 330.0), (collected.shape, collected.angle)
+    dlg.top.destroy()
+
+    # 화면 표시(오버레이)와 실제 캡처
+    app.cfg.rois.append(roi)
+    app.monitor = object.__new__(worker.Monitor)
+    app._sync_overlay()
+    root.update()
+    app.monitor = None
+    app._sync_overlay()
+    app.cfg.rois.remove(roi)
+    with Grabber() as g:
+        frame = geometry.grab(g, roi)
+    assert frame.shape == (80, 120, 3), frame.shape
+    print("ROI 모양·회전 확인: 편집기·설정 창·화면 표시·캡처")
+
+
+def i18n_tr(text):
+    import i18n
+    return i18n.tr(text)
 
 
 def wait_event(app, cond, timeout=15.0):

@@ -44,6 +44,8 @@ class ROI:
     still_only: bool = False           # 대상이 움직이는 동안은 판정하지 않고, 정지한 순간 1회만 판정
     still_diff: float = 3.0            # 이 값 이하의 화면 변화량이면 '정지'로 본다 (밝기 0~255 평균 차)
     still_frames: int = 2              # 연속 몇 번 변화가 없어야 정지로 확정할지
+    shape: str = "rect"                # 감시 영역 모양: rect(사각형) | ellipse(타원·원)
+    angle: float = 0.0                 # 회전 각도(도, 시계 방향) – 상자 (x, y, w, h)를 중심 기준으로 돌림
     wall: list = field(default_factory=list)   # 카메라 월 카드 배치 [x, y, 화면 폭, 화면 높이], 비우면 자동 배치
 
     def center(self):
@@ -51,7 +53,7 @@ class ROI:
 
     def signature(self) -> str:
         """판정 상태를 초기화해야 하는 변경(위치/유형/조건)을 구분하기 위한 값."""
-        return json.dumps([self.x, self.y, self.w, self.h, self.detector, self.params,
+        return json.dumps([self.x, self.y, self.w, self.h, self.shape, round(self.angle, 2), self.detector, self.params,
                            self.expected_process.lower(), self.still_only, self.still_diff,
                            self.still_frames], sort_keys=True)
 
@@ -134,6 +136,9 @@ def roi_from_dict(d: dict) -> ROI:
     roi.still_only = bool(d.get("still_only", False))
     roi.still_diff = _to_float(d.get("still_diff"), 3.0, 0.1, 255.0)
     roi.still_frames = max(1, min(20, _to_int(d.get("still_frames"), 2)))
+    shape = str(d.get("shape") or "rect")
+    roi.shape = shape if shape in ("rect", "ellipse") else "rect"
+    roi.angle = round(_to_float(d.get("angle"), 0.0) % 360.0, 2)
     roi.wall = parse_wall(d.get("wall"))
     return roi
 

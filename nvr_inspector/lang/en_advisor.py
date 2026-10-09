@@ -105,4 +105,22 @@ EN = {
         "e.g. Ollama → http://127.0.0.1:11434/v1 · model qwen2.5:7b\nLM Studio → http://127.0.0.1:1234/v1\n"
         "Sent: per-ROI judgment statistics and the recommendation list (text) only. Screens and images are never sent.\n"
         "External internet addresses are blocked for security.",
+    # ROI 모양·회전
+    "사각형": "Rectangle",
+    "타원 (원)": "Ellipse (circle)",
+    " · 모양 변경 → 샘플/기준 이미지 다시 등록 권장": " · shape changed → re-register samples/reference images",
+    "0°로": "Reset 0°",
+    "ROI 1개 지정 – 그린 뒤 회전·이동하고 Enter": "One ROI – draw, rotate/move, then Enter",
+    "□ 사각형 (R)": "□ Rectangle (R)",
+    "◯ 타원·원 (E)": "◯ Ellipse (E)",
+    "각도 {angle}°": "Angle {angle}°",
+    "각도(°)": "Angle (°)",
+    "각도는 숫자로 입력하세요.": "Enter the angle as a number.",
+    "드래그: 영역 그리기 (Shift: 정사각형·원)  |  ⟳ 핸들·휠·←→: 회전 (Shift: 15°·5°)  |  영역 안 드래그: 이동  |  우클릭·Ctrl+Z: 마지막 취소  |  Enter: 완료  |  Esc: 취소":
+        "Drag: draw (Shift: square/circle)  |  ⟳ handle·wheel·←→: rotate (Shift: 15°·5°)  |  "
+        "Drag inside: move  |  Right-click·Ctrl+Z: undo  |  Enter: done  |  Esc: cancel",
+    "모양": "Shape",
+    "모양·각도는 [⌖ 위치 재지정]에서 마우스로도 바꿀 수 있습니다 (원: 타원 + 폭=높이)":
+        "Shape and angle can also be set with the mouse in [⌖ Reposition] (circle: ellipse with width = height)",
+    "새 ROI {n}  ({w}×{h}{angle})": "New ROI {n}  ({w}×{h}{angle})",
 }

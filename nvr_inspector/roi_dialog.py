@@ -8,6 +8,7 @@ from typing import Dict, Optional
 from PIL import Image, ImageTk
 
 import detectors
+import geometry
 import notifier
 import occlusion
 import winutil
@@ -25,6 +26,9 @@ def _fmt_param(value) -> str:
         return ",".join(str(int(v)) for v in value)
     f = float(value)
     return str(int(f)) if f.is_integer() else f"{f:g}"
+
+
+_SHAPES = {"rect": "사각형", "ellipse": "타원 (원)"}
 
 
 class RoiDialog:
@@ -72,6 +76,17 @@ class RoiDialog:
             self.v_rect[key] = tk.StringVar(value=str(getattr(self.roi, key)))
             ttk.Label(box, text=label).grid(row=2, column=i * 2, sticky="e", padx=(0 if i == 0 else 6, 2))
             ttk.Entry(box, textvariable=self.v_rect[key], width=7).grid(row=2, column=i * 2 + 1, sticky="w")
+        self.v_shape = tk.StringVar(value=tr(_SHAPES[self.roi.shape]))
+        self.v_angle = tk.StringVar(value=f"{self.roi.angle:g}")
+        ttk.Label(box, text=tr("모양")).grid(row=3, column=0, sticky="e", pady=(4, 0))
+        ttk.Combobox(box, textvariable=self.v_shape, state="readonly", width=12,
+                     values=[tr(v) for v in _SHAPES.values()]).grid(row=3, column=1, columnspan=3, sticky="w",
+                                                                    pady=(4, 0))
+        ttk.Label(box, text=tr("각도(°)")).grid(row=3, column=4, sticky="e", padx=(6, 2), pady=(4, 0))
+        ttk.Spinbox(box, from_=-180, to=360, increment=1, textvariable=self.v_angle, width=7).grid(
+            row=3, column=5, sticky="w", pady=(4, 0))
+        ttk.Label(box, text=tr("모양·각도는 [⌖ 위치 재지정]에서 마우스로도 바꿀 수 있습니다 (원: 타원 + 폭=높이)"),
+                  foreground="#555555").grid(row=4, column=0, columnspan=8, sticky="w", pady=(2, 0))
 
     def _build_detect(self, parent):
         box = ttk.LabelFrame(parent, text=tr("검출 조건"), padding=8)
@@ -203,6 +218,12 @@ class RoiDialog:
                 raise ValueError(tr("위치 '{label}' 값이 숫자가 아닙니다.", label=label))
         if roi.w < 4 or roi.h < 4:
             raise ValueError(tr("ROI 폭/높이는 4 이상이어야 합니다."))
+        selected = self.v_shape.get()
+        roi.shape = next((k for k, v in _SHAPES.items() if tr(v) == selected), "rect")
+        try:
+            roi.angle = round(float(self.v_angle.get()) % 360.0, 2)
+        except ValueError:
+            raise ValueError(tr("각도는 숫자로 입력하세요."))
         return roi
 
     def _collect(self) -> ROI:
@@ -267,10 +288,10 @@ class RoiDialog:
         try:
             with hidden_windows(self.top, self.master):
                 with Grabber() as g:
-                    frames.append(g.grab(roi.x, roi.y, roi.w, roi.h))
+                    frames.append(geometry.grab(g, roi))
                     if roi.detector == "frozen" or roi.still_only:
                         time.sleep(1.0 if roi.detector == "frozen" else 0.5)
-                        frames.append(g.grab(roi.x, roi.y, roi.w, roi.h))
+                        frames.append(geometry.grab(g, roi))
                 if roi.expected_process and winutil.IS_WINDOWS:
                     windows = winutil.visible_windows()
         except Exception as e:
@@ -293,7 +314,8 @@ class RoiDialog:
                             state=tr("움직임 (판정 안 함)") if moving else tr("정지 (판정함)"),
                             limit=f"{roi.still_diff:g}"))
         if roi.expected_process and winutil.IS_WINDOWS:
-            vis = occlusion.roi_visibility((roi.x, roi.y, roi.w, roi.h), windows or [], roi.expected_process)
+            vis = occlusion.roi_visibility(geometry.capture_rect(roi), windows or [], roi.expected_process,
+                                           inside=lambda xs, ys: geometry.contains(roi, xs, ys))
             if vis.ok:
                 lines.append(tr("대상 프로그램 확인: {process} ✔ (ROI를 가린 창 없음)", process=roi.expected_process))
             else:
@@ -311,7 +333,7 @@ class RoiDialog:
             roi = self._collect_rect_only()
             with hidden_windows(self.top, self.master):
                 with Grabber() as g:
-                    frame = g.grab(roi.x, roi.y, roi.w, roi.h)
+                    frame = geometry.grab(g, roi)
         except Exception as e:
             self._regrab()
             messagebox.showerror(tr("캡처 실패"), str(e), parent=self.top)

@@ -1,5 +1,6 @@
 """GUI/Windows 없이 검증 가능한 핵심 로직 테스트.  실행: python -m unittest discover -s tests"""
 import json
+import math
 import os
 import queue
 import sys
@@ -14,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import agent  # noqa: E402
 import config  # noqa: E402
 import detectors  # noqa: E402
+import geometry  # noqa: E402
 import advisor  # noqa: E402
 import llm  # noqa: E402
 import notifier  # noqa: E402
@@ -838,6 +840,68 @@ class LLMTests(unittest.TestCase):
             server.shutdown()
         with self.assertRaises(llm.LLMError):
             llm.LocalLLM(f"http://127.0.0.1:{server.server_port}/v1", "qwen", timeout=2).chat("x")
+
+
+class GeometryTests(unittest.TestCase):
+    def test_plain_rect_unchanged(self):
+        roi = config.ROI(x=10, y=20, w=30, h=40)
+        self.assertTrue(geometry.is_plain(roi))
+        self.assertEqual(geometry.capture_rect(roi), (10, 20, 30, 40))
+        img = noise(100, 100)
+        out = geometry.extract(roi, img, (0, 0))
+        self.assertTrue(np.array_equal(out, img[20:60, 10:40]))
+
+    def test_rotated_rect_is_straightened(self):
+        # 화면에 30° 돌아간 막대를 그리고, 같은 각도의 ROI로 꺼내면 바로 선 막대가 나와야 한다
+        roi = config.ROI(x=100, y=100, w=120, h=40, angle=30)
+        x, y, w, h = geometry.capture_rect(roi)
+        self.assertGreater(w, 120)
+        self.assertGreater(h, 40)
+        canvas = np.zeros((400, 400, 3), dtype=np.uint8)
+        ys, xs = np.mgrid[0:400, 0:400]
+        inner = config.ROI(x=110, y=110, w=100, h=20, angle=30)        # 같은 중심의 작은 막대
+        canvas[geometry.contains(inner, xs + 0.5, ys + 0.5)] = 255
+        out = geometry.extract(roi, canvas, (0, 0))
+        self.assertEqual(out.shape, (40, 120, 3))
+        self.assertGreater(out[15:25, 20:100].mean(), 200)             # 가운데 띠는 밝고
+        self.assertLess(out[:5].mean(), 30)                              # 위·아래는 어둡다
+        self.assertLess(out[-5:].mean(), 30)
+
+    def test_ellipse_fill_and_contains(self):
+        roi = config.ROI(x=0, y=0, w=60, h=40, shape="ellipse")
+        self.assertFalse(geometry.is_plain(roi))
+        img = np.zeros((40, 60, 3), dtype=np.uint8)
+        img[:, :30] = 200                                               # 왼쪽 절반 밝음
+        out = geometry.extract(roi, img, (0, 0))
+        self.assertEqual(out.shape, (40, 60, 3))
+        self.assertEqual(int(out[0, 0, 0]), 200)                        # 모서리는 같은 줄 안쪽 픽셀로 채움
+        self.assertEqual(int(out[0, 59, 0]), 0)
+        self.assertAlmostEqual(float((out[..., 0] > 100).mean()), 0.5, delta=0.05)   # 비율 유지
+        mask = geometry.ellipse_mask(60, 40)
+        self.assertAlmostEqual(float(mask.mean()), math.pi / 4, delta=0.03)
+        self.assertTrue(geometry.contains(roi, np.array([30.0]), np.array([20.0]))[0])
+        self.assertFalse(geometry.contains(roi, np.array([1.0]), np.array([1.0]))[0])
+
+    def test_rotated_circle_capture_and_config(self):
+        roi = config.ROI(x=50, y=50, w=80, h=80, shape="ellipse", angle=45)
+        x, y, w, h = geometry.capture_rect(roi)
+        self.assertLessEqual(abs(w - 80), 2)                            # 원은 돌려도 크기 그대로
+        back = config.roi_from_dict(config.asdict(roi))
+        self.assertEqual((back.shape, back.angle), ("ellipse", 45.0))
+        self.assertEqual(config.roi_from_dict({"angle": -30}).angle, 330.0)
+        self.assertEqual(config.roi_from_dict({"shape": "star"}).shape, "rect")
+        self.assertNotEqual(roi.signature(), config.roi_from_dict(dict(config.asdict(roi), angle=10)).signature())
+        self.assertIn("45°", geometry.describe(roi))
+
+    def test_occlusion_counts_only_inside_shape(self):
+        roi = config.ROI(x=0, y=0, w=100, h=100, shape="ellipse")
+        corner = occlusion_window("chrome.exe", (0, 0, 14, 14))           # 사각형 모서리만 덮음 – 원 밖
+        nvr = occlusion_window("NVR.exe", (0, 0, 500, 500))
+        plain = occlusion.roi_visibility((0, 0, 100, 100), [corner, nvr], "NVR.exe")
+        self.assertFalse(plain.ok)
+        shaped = occlusion.roi_visibility((0, 0, 100, 100), [corner, nvr], "NVR.exe",
+                                          inside=lambda xs, ys: geometry.contains(roi, xs, ys))
+        self.assertTrue(shaped.ok, shaped.detail)
 
 
 class NotifierTests(unittest.TestCase):

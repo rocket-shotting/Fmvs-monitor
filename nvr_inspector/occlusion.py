@@ -5,7 +5,7 @@ ROI 중심 한 점만 보면 옆에 붙은 창의 보이지 않는 테두리, �
 그래서 위에 있는 창부터 차례로 ROI 영역을 채워 가며, 대상 프로그램보다 위에 있는 다른 창이
 ROI를 실제로 덮은 면적이 있을 때만 '가림'으로 판정한다. 대시보드가 떠 있어도 ROI와 겹치지 않으면 판정한다."""
 import math
-from typing import Iterable, NamedTuple, Tuple
+from typing import Callable, Iterable, NamedTuple, Optional, Tuple
 
 import numpy as np
 
@@ -31,15 +31,25 @@ def _shown(name: str) -> str:
     return tr(OWN_LABEL) if name == OWN_LABEL else name
 
 
-def roi_visibility(roi_rect: Tuple[int, int, int, int], windows: Iterable, expected: str) -> Visibility:
-    """roi_rect=(x, y, w, h), windows=위에 있는 창부터 (process, rect=(l, t, r, b), own) 목록."""
+def roi_visibility(roi_rect: Tuple[int, int, int, int], windows: Iterable, expected: str,
+                   inside: Optional[Callable] = None) -> Visibility:
+    """roi_rect=(x, y, w, h), windows=위에 있는 창부터 (process, rect=(l, t, r, b), own) 목록.
+    inside(xs, ys): 회전·타원 ROI에서 실제 감시 영역인 화면 점 (없으면 사각형 전체)."""
     x, y, w, h = roi_rect
     if w <= 0 or h <= 0:
         return Visibility(True, "")
     expected = expected.lower()
     step = max(1, math.ceil(max(w, h) / _MAX_GRID))
     gh, gw = math.ceil(h / step), math.ceil(w / step)
-    assigned = np.zeros((gh, gw), dtype=bool)
+    if inside is not None:                     # 모양 밖(모서리)은 처음부터 '판단 완료'로 두어 세지 않는다
+        xs = x + (np.arange(gw) + 0.5) * step
+        ys = y + (np.arange(gh) + 0.5) * step
+        want = np.asarray(inside(xs[None, :], ys[:, None]), dtype=bool) & np.ones((gh, gw), dtype=bool)
+        if not want.any():
+            want[:] = True
+    else:
+        want = np.ones((gh, gw), dtype=bool)
+    assigned = ~want
     target = np.zeros((gh, gw), dtype=bool)
     covers: dict = {}
     top_name = None
@@ -69,7 +79,7 @@ def roi_visibility(roi_rect: Tuple[int, int, int, int], windows: Iterable, expec
         if assigned.all():
             break
 
-    total = gh * gw
+    total = int(want.sum())
     seen = int(target.sum())
     if seen == 0:
         where = tr(" · ROI 위치: {name}", name=_shown(top_name)) if top_name else ""

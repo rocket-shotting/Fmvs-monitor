@@ -9,6 +9,7 @@ import tkinter as tk
 from datetime import datetime
 from typing import Dict, Optional
 
+import geometry
 import ui_util
 import winutil
 from i18n import tr
@@ -101,7 +102,7 @@ class ScreenOverlay:
             return
         self.canvas.delete("all")
         self.items.clear()
-        self.rects = [(r.x, r.y, r.w, r.h) for r in rois if r.enabled]
+        self.rects = [geometry.capture_rect(r) for r in rois if r.enabled]
         if self.show_rois:
             for roi in rois:
                 if roi.enabled:
@@ -112,9 +113,12 @@ class ScreenOverlay:
 
     def _draw_roi(self, roi, state: str):
         ox, oy = self.origin
-        x0, y0 = roi.x - ox - _GAP, roi.y - oy - _GAP
-        x1, y1 = roi.x - ox + roi.w + _GAP - 1, roi.y - oy + roi.h + _GAP - 1
-        rect = self.canvas.create_rectangle(x0, y0, x1, y1, width=_BORDER)
+        # 실제 모양(회전 사각형·타원)을 바깥으로 넓혀 그린다 – ROI 픽셀을 덮지 않음
+        pts = [(px - ox, py - oy) for px, py in geometry.shape_polygon(roi, pad=_GAP + _BORDER / 2)]
+        rect = self.canvas.create_polygon(*[v for p in pts for v in p], fill="", width=_BORDER)
+        bx, by, bw, bh = geometry.capture_rect(roi)
+        x0, y0 = bx - ox - _GAP, by - oy - _GAP
+        y1 = by - oy + bh + _GAP - 1
         # 이름표는 ROI 위쪽 바깥 (화면 위 끝이면 아래쪽 바깥)
         above = y0 - 20 >= 0
         text = self.canvas.create_text(x0 + 4, y0 - 2 if above else y1 + 2, anchor="sw" if above else "nw",

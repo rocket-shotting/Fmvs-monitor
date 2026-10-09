@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from PIL import Image, ImageTk
 
 import detectors
+import geometry
 import paths
 import worker
 from capture import Grabber
@@ -237,7 +238,7 @@ class SamplesDialog:
         try:
             with hidden_windows(self.top, self.master, delay=0.4):
                 with Grabber() as g:
-                    frame = g.grab(r.x, r.y, r.w, r.h)
+                    frame = geometry.grab(g, r)
             worker.save_png(frame, paths.new_reference_path(r.id, cls))
         except Exception as e:
             self._regrab()

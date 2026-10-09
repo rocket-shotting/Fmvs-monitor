@@ -120,11 +120,12 @@ class RegionSelector:
         self.canvas.create_window(cx, -self.top + 12, window=frame, anchor="n")
 
     def set_mode(self, mode: str):
-        """그릴 모양 선택. 선택된 영역이 있으면 그 모양도 바꾼다."""
+        """그릴 모양 선택. 1개 모드(위치 재지정)에서는 지금 영역의 모양도 바꾼다.
+        여러 개 모드에서는 다음에 그릴 모양만 바뀐다 (이미 그린 영역은 그대로)."""
         self.mode = mode
         for m, btn in self.mode_buttons.items():
             btn.configure(relief="sunken" if m == mode else "raised")
-        if self.selected is not None:
+        if self.single and self.selected is not None:
             self.regions[self.selected]["shape"] = mode
             self._redraw(self.selected)
 

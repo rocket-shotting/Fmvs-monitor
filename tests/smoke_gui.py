@@ -590,8 +590,9 @@ def shape_check(app):
                                     initial=roi_editor.Region(50, 60, 100, 50, "ellipse", 20.0))
     root.update()
     sel.add_region(300, 300, 80, 40)
+    sel.set_mode("rect")                                 # 1개 모드: 지금 영역의 모양도 바뀜
     sel._finish()
-    assert len(sel.result) == 1 and sel.result[0].angle == 20.0 and sel.result[0].shape == "ellipse", sel.result
+    assert len(sel.result) == 1 and sel.result[0].angle == 20.0 and sel.result[0].shape == "rect", sel.result
 
     # 설정 창: 모양·각도 입력
     roi = config.ROI(name="타원", x=200, y=200, w=120, h=80, shape="ellipse", angle=15)

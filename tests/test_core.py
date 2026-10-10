@@ -1058,6 +1058,24 @@ class NgAnalysisTests(unittest.TestCase):
         self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
 
 
+class ResetCountsTests(unittest.TestCase):
+    def test_reset_keeps_state_and_trend(self):
+        clock = FakeClock()
+        ag = agent.VisionAgent(clock=clock)
+        ag.on_status("r1", "ok", "정상")
+        ag.on_status("r1", "alarm", "어두움 90%")
+        ag.on_alert({"roi_id": "r1", "roi_name": "탭", "detail": "어두움 90%"})
+        k = ag.kpis()
+        self.assertEqual((k["inspections"], k["ng"], k["since"]), (2, 1, None))
+        ag.reset_counts()
+        k = ag.kpis()
+        self.assertEqual((k["inspections"], k["ng"], k["ok_rate"], k["alarms"]), (0, 0, None, 1))
+        self.assertEqual(k["since"], clock())
+        self.assertEqual(sum(ag.hourly_ng.values()), 1)          # NG 추이는 유지
+        ag.on_status("r1", "ok", "정상")
+        self.assertEqual((ag.kpis()["inspections"], ag.kpis()["ok_rate"]), (1, 100.0))
+
+
 class I18nTests(unittest.TestCase):
     def tearDown(self):
         import i18n

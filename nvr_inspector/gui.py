@@ -159,6 +159,7 @@ class App:
             tile = db.KpiTile(kpi, title, color)
             tile.pack(side="left", fill="x", expand=True, padx=(0, 8))
             self.kpi[key] = tile
+        db.FlatButton(kpi, tr("⟲ 집계\n초기화"), self.reset_counts, padx=10, pady=6).pack(side="left", fill="y")
 
         # ---- 본문 위: 카메라 월 | 에이전트 활동·시스템 로그 + NG 추이 ----
         vpaned = ttk.PanedWindow(self.root, orient="vertical", style="Dark.TPanedwindow")
@@ -315,6 +316,17 @@ class App:
         self._select_roi(roi_id)
         self.edit_selected()
 
+    def reset_counts(self):
+        """KPI의 판정 수·NG 감지·정상률을 0부터 다시 센다 (확인 후)."""
+        if not messagebox.askyesno(
+                tr("집계 초기화"),
+                tr("판정 수·NG 감지·정상률을 0부터 다시 셉니다.\n"
+                   "NG 추이 그래프·스냅샷·로그·감시 상태는 그대로 유지됩니다.\n\n초기화할까요?"),
+                parent=self.root):
+            return
+        self.agent.reset_counts()
+        self._refresh_kpis()
+
     def _refresh_kpis(self):
         T = db.T
         k = self.agent.kpis()
@@ -322,10 +334,12 @@ class App:
         up = int(k["uptime"])
         self.kpi["uptime"].set(f"{up // 3600:02d}:{up % 3600 // 60:02d}:{up % 60:02d}" if running else "--:--:--",
                                tr("에이전트 가동 중") if running else tr("대기 중"), T["accent"] if running else T["muted"])
-        self.kpi["inspections"].set(f"{k['inspections']:,}", tr("누적 판정"))
-        self.kpi["ng"].set(str(k["ng"]), tr("누적 이상 감지"), T["red"] if k["ng"] else None)
+        since = k.get("since")
+        since_text = tr("{time}부터", time=time.strftime("%m-%d %H:%M", time.localtime(since))) if since else ""
+        self.kpi["inspections"].set(f"{k['inspections']:,}", since_text or tr("누적 판정"))
+        self.kpi["ng"].set(str(k["ng"]), since_text or tr("누적 이상 감지"), T["red"] if k["ng"] else None)
         rate = k["ok_rate"]
-        self.kpi["ok_rate"].set(f"{rate:.1f}%" if rate is not None else "—", tr("판정 대비 정상"),
+        self.kpi["ok_rate"].set(f"{rate:.1f}%" if rate is not None else "—", since_text or tr("판정 대비 정상"),
                                 T["green"] if rate is not None and rate >= 99 else (T["amber"] if rate is not None else None))
         enabled = sum(r.enabled for r in self.cfg.rois)
         self.kpi["rois"].set(f"{enabled}", tr("전체 {n}개 중 사용", n=len(self.cfg.rois)))

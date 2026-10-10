@@ -84,6 +84,7 @@ class VisionAgent:
         self.names: Dict[str, str] = {}
         self.enabled_count = 0
         self.started_at: Optional[float] = None
+        self.counts_since: Optional[float] = None   # 판정 수·NG·정상률 집계를 초기화한 시각 (None: 프로그램 시작부터)
         self.hourly_ng: Counter = Counter()        # 'YYYY-MM-DD HH' → NG 수
         self.roi_hourly: Dict[str, Counter] = defaultdict(Counter)   # ROI별 'YYYY-MM-DD HH' → NG 수
         # (시각, ROI, 구분, 상세, 스냅샷 경로)
@@ -269,13 +270,23 @@ class VisionAgent:
         self.timeline = deque(((t, n, k, d, renamed.get(snap, snap)) for t, n, k, d, snap in self.timeline),
                               maxlen=self.timeline.maxlen)
 
+    def reset_counts(self) -> None:
+        """판정 수·NG 감지·정상률 집계를 0부터 다시 센다.
+        현재 상태(경보 중 여부)와 시간대별 NG 추이·기록(타임라인)은 그대로 둔다."""
+        for st in self.stats.values():
+            st.inspections = st.ok = st.ng = 0
+            st.state_counts.clear()
+        self.counts_since = self.clock()
+        self.say("act", tr("판정 수·NG 감지·정상률 집계 초기화 (NG 추이·기록은 유지)"))
+
     def kpis(self) -> dict:
         total = sum(s.inspections for s in self.stats.values())
         ng = sum(s.ng for s in self.stats.values())
         uptime = self.clock() - self.started_at if self.started_at else 0.0
         alarms = sum(1 for s in self.stats.values() if s.last_state == "alarm")
         ok_rate = max(0.0, 100.0 * (1 - ng / total)) if total else None
-        return {"uptime": uptime, "inspections": total, "ng": ng, "ok_rate": ok_rate, "alarms": alarms}
+        return {"uptime": uptime, "inspections": total, "ng": ng, "ok_rate": ok_rate, "alarms": alarms,
+                "since": self.counts_since}
 
     def hourly_series(self, hours: int = 12, roi_id: Optional[str] = None) -> List[Tuple[str, int]]:
         """최근 hours시간의 시간대별 NG 수. roi_id를 주면 그 ROI만."""

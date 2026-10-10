@@ -167,4 +167,13 @@ EN = {
     "재생 날짜는 2026-10-09 형식으로 입력하세요.": "Enter the playback date like 2026-10-09.",
     "＋ 라이브 시간 위치": "+ Live time area",
     "＋ 재생 시간 위치": "+ Playback time area",
+    # 집계 초기화
+    "⟲ 집계\n초기화": "⟲ Reset\ncounts",
+    "집계 초기화": "Reset counts",
+    "판정 수·NG 감지·정상률을 0부터 다시 셉니다.\nNG 추이 그래프·스냅샷·로그·감시 상태는 그대로 유지됩니다.\n\n초기화할까요?":
+        "Judgments, NG detections and OK rate will start again from 0.\n"
+        "The NG trend chart, snapshots, logs and monitoring state are kept.\n\nReset now?",
+    "{time}부터": "since {time}",
+    "판정 수·NG 감지·정상률 집계 초기화 (NG 추이·기록은 유지)":
+        "Judgment / NG / OK-rate counts reset (NG trend and history kept)",
 }

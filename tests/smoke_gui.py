@@ -30,6 +30,7 @@ config.save = lambda cfg, path=None: None
 
 import alert  # noqa: E402
 import gui  # noqa: E402
+from unittest import mock  # noqa: E402
 import roi_dialog  # noqa: E402
 import samples_dialog  # noqa: E402
 import settings_dialog  # noqa: E402
@@ -225,6 +226,17 @@ def main():
 
     # ---- 카메라 월: 카드 끌어서 이동 / 크기 조절 / 자동 정렬 ----
     wall_drag_check(app, roi)
+
+    # ---- KPI 집계 초기화: 확인 창에서 '예' → 판정 수·NG 0, '아니오' → 그대로 ----
+    app.agent.on_status(roi.id, "ok", "정상")
+    with mock.patch.object(gui.messagebox, "askyesno", return_value=False):
+        app.reset_counts()
+    assert app.agent.kpis()["inspections"] > 0
+    with mock.patch.object(gui.messagebox, "askyesno", return_value=True):
+        app.reset_counts()
+    assert app.agent.kpis()["inspections"] == 0 and app.agent.kpis()["since"] is not None
+    assert app.kpi["inspections"].value.cget("text") == "0", app.kpi["inspections"].value.cget("text")
+    root.update()
 
     # ---- ROI 가림 판정: 실제로 덮은 창이 있을 때만 건너뜀 ----
     occlusion_check(app)

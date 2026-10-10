@@ -205,21 +205,17 @@ class RegionSelector:
         self._drag = {"kind": "draw", "start": (e.x, e.y),
                       "live": self.canvas.create_rectangle(e.x, e.y, e.x, e.y, outline=_COLOR, width=2)}
 
-    def _box(self, e):
-        x0, y0 = self._drag["start"]
-        dx, dy = e.x - x0, e.y - y0
-        if e.state & _SHIFT:                     # Shift: 정사각형 / 원
-            side = max(abs(dx), abs(dy))
-            dx, dy = math.copysign(side, dx or 1), math.copysign(side, dy or 1)
-        x, y = min(x0, x0 + dx), min(y0, y0 + dy)
-        return int(x), int(y), int(abs(dx)), int(abs(dy))
+    @staticmethod
+    def _box(start, e):
+        """드래그 시작점과 현재 마우스로 상자 (Shift: 정사각형·원)."""
+        return geometry.drag_box(start, (e.x, e.y), bool(e.state & _SHIFT))
 
     def _on_drag(self, e):
         d = self._drag
         if d is None:
             return
         if d["kind"] == "draw":
-            x, y, w, h = self._box(e)
+            x, y, w, h = self._box(d["start"], e)
             self.canvas.delete(d["live"])
             make = self.canvas.create_oval if self.mode == "ellipse" else self.canvas.create_rectangle
             d["live"] = make(x, y, x + w, y + h, outline=_COLOR, width=2)
@@ -236,7 +232,7 @@ class RegionSelector:
         if d is None or d["kind"] != "draw":
             return
         self.canvas.delete(d["live"])
-        x, y, w, h = self._box(e)
+        x, y, w, h = self._box(d["start"], e)        # 드래그 정보는 위에서 비웠으므로 d를 쓴다
         if w < _MIN_SIZE or h < _MIN_SIZE:
             self._select(None)
             return

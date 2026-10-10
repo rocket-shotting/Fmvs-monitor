@@ -955,6 +955,48 @@ class NvrTimeTests(unittest.TestCase):
         self.assertEqual((len(cfg.time_sources), cfg.playback_date, cfg.rois[0].time_source),
                          (2, "2026-10-09", "재생 1"))
 
+    def test_drag_box(self):
+        self.assertEqual(geometry.drag_box((100, 100), (40, 160)), (40, 100, 60, 60))
+        self.assertEqual(geometry.drag_box((10, 10), (50, 20)), (10, 10, 40, 10))
+        self.assertEqual(geometry.drag_box((10, 10), (50, 20), square=True), (10, 10, 40, 40))   # Shift: 정사각형
+        self.assertEqual(geometry.drag_box((50, 50), (20, 40), square=True), (20, 20, 30, 30))
+
+    def test_ng_does_not_wait_for_ocr_and_renames_later(self):
+        import threading
+        import time as _t
+        from datetime import datetime
+        release = threading.Event()
+
+        def slow_read(src, rgb, playback):           # OCR이 오래 걸려도 검출은 바로 진행되어야 함
+            release.wait(5)
+            return datetime(2026, 10, 10, 10, 56, 49), "2026-10-10 10:56:49"
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(worker.paths, "SNAPSHOT_DIR", tmp), \
+                mock.patch.object(nvr_time, "read", side_effect=slow_read):
+            cfg = config.AppConfig(time_sources=[{"name": "라이브 1", "kind": "live", "x": 0, "y": 0,
+                                                  "w": 50, "h": 20}])
+            events = queue.Queue()
+            mon = worker.Monitor(cfg, events, mock.Mock())
+            mon._grabber = mock.Mock(grab=mock.Mock(return_value=noise(20, 50)))
+            roi = config.ROI(name="cam", w=40, h=30)
+            start = _t.monotonic()
+            mon._notify_ng(cfg, roi, "alert", "NG", None, noise(30, 40), None)
+            self.assertLess(_t.monotonic() - start, 1.0)
+            alert = events.get(timeout=1)[1]
+            self.assertTrue(alert["snapshot"].endswith("_PC.png"))
+            self.assertEqual(alert["nvr_pending"], "라이브 1")
+            release.set()
+            kind, data = events.get(timeout=5)
+            self.assertEqual(kind, "nvr_time")
+            self.assertEqual(data["nvr_time"], "2026-10-10 10:56:49")
+            new_view = data["renamed"][alert["snapshot"]]
+            self.assertTrue(os.path.basename(new_view).startswith("20261010_105649_cam_LIVE"))
+            self.assertTrue(os.path.exists(new_view) and not os.path.exists(alert["snapshot"]))
+            ag = agent.VisionAgent()
+            ag.timeline.append((0.0, "cam", "NG", "x", alert["snapshot"]))
+            ag.rename_snapshots(data["renamed"])
+            self.assertEqual(ag.timeline[-1][4], new_view)
+
     def test_snapshot_named_with_nvr_time(self):
         from datetime import datetime
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(worker.paths, "SNAPSHOT_DIR", tmp):

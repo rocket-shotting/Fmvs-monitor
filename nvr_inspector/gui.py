@@ -1054,6 +1054,12 @@ class App:
                     self._advisor_busy = False
                     self._advice = (event[1], event[2])
                     self._show_advice(announce=True)
+                elif kind == "nvr_time":            # NVR 화면 시간을 읽음 → 팝업 시간·스냅샷 경로 갱신
+                    data = event[1]
+                    popup = self.alerts.popups.get(data["roi_id"])
+                    if popup is not None:
+                        popup.update_nvr(data["nvr_time"], data["nvr_source"], data["renamed"])
+                    self.agent.rename_snapshots(data["renamed"])
                 elif kind == "ai_ng":
                     _k, roi_id, title, text, error = event
                     self._ai_busy = False

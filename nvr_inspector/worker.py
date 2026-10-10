@@ -309,9 +309,7 @@ class Monitor(threading.Thread):
         repeat_due = roi.repeat_min > 0 and now - rt.last_alert >= roi.repeat_min * 60
         if not rt.alerted or repeat_due:
             kind = "repeat" if rt.alerted else "alert"
-            nvr = self._nvr_time(cfg, roi)
-            snapshot, raw = self._save_snapshot(roi, frame, res.mask, nvr)
-            self._fire(cfg, roi, kind, res.detail, elapsed, snapshot, raw, nvr)
+            self._notify_ng(cfg, roi, kind, res.detail, elapsed, frame, res.mask)
             rt.alerted, rt.last_alert = True, now
         self._emit("status", roi.id, "alarm", res.detail + tr(" · {dur} 지속", dur=notifier.fmt_duration(elapsed)))
 
@@ -356,9 +354,7 @@ class Monitor(threading.Thread):
         if res.abnormal is None:
             rt.last_result = ("wait", stamp + res.detail)
         elif res.abnormal:
-            nvr = self._nvr_time(cfg, roi)
-            snapshot, raw = self._save_snapshot(roi, frame, res.mask, nvr)
-            self._fire(cfg, roi, "alert", res.detail, None, snapshot, raw, nvr)
+            self._notify_ng(cfg, roi, "alert", res.detail, None, frame, res.mask)
             rt.alerted, rt.last_alert = True, self._clock()
             rt.last_result = ("alarm", stamp + res.detail)
         else:
@@ -368,22 +364,46 @@ class Monitor(threading.Thread):
             rt.last_result = ("ok", stamp + res.detail)
         self._emit("status", roi.id, *rt.last_result)
 
-    def _nvr_time(self, cfg: AppConfig, roi: ROI):
-        """NG 순간 NVR 화면에 표시된 시간 (라이브: 오른쪽 위 흰 글씨, 재생: 왼쪽 아래 노란 글씨).
-        반환: (datetime 또는 None, 출처 이름). 시간 표시 영역이 없거나 읽지 못하면 (None, '')."""
+    def _grab_time(self, cfg: AppConfig, roi: ROI):
+        """NG 순간 NVR 시간 글자 부분만 캡처 (빠름). 반환: (시간 표시 영역, 이미지) 또는 None.
+        글자 읽기(OCR)는 1~5초 걸려 검출 스레드를 멈추므로 nvr_time.ocr_queue()에서 따로 처리한다."""
         src = nvr_time.resolve(roi, getattr(cfg, "time_sources", []))
         if src is None or self._grabber is None:
-            return None, ""
+            return None
         try:
-            rgb = self._grabber.grab(src["x"], src["y"], src["w"], src["h"])
-            when, text = nvr_time.read(src, rgb, getattr(cfg, "playback_date", ""))
+            return src, self._grabber.grab(src["x"], src["y"], src["w"], src["h"])
         except Exception as e:
-            log.warning("NVR 시간 읽기 실패 [%s]: %s", src.get("name"), e)
-            return None, ""
+            log.warning("NVR 시간 영역 캡처 실패 [%s]: %s", src.get("name"), e)
+            return None
+
+    def _apply_nvr_time(self, roi: ROI, src: dict, view: Optional[str], raw: Optional[str], when, text: str):
+        """(OCR 스레드) 읽은 NVR 시간으로 스냅샷 파일 이름을 바꾸고 화면에 알린다."""
         if when is None:
-            log.warning("NVR 시간 인식 실패 [%s]: '%s' – PC 시간 사용", src.get("name"), text[:40])
-            return None, ""
-        return when, src["name"]
+            log.warning("NVR 시간 인식 실패 [%s]: '%s' – PC 시간 유지", src.get("name"), (text or "")[:40])
+            return
+        tag = {"live": "LIVE", "search": "SEARCH"}.get(src.get("kind"), "PC")
+        base = os.path.join(paths.SNAPSHOT_DIR, f"{when:%Y%m%d_%H%M%S}_{_safe_filename(roi.name)}_{tag}")
+        renamed = {}
+        for old, new in ((raw, base + "_원본.png"), (view, base + ".png")):  # i18n: skip
+            if old and old not in renamed and os.path.exists(old):
+                try:
+                    os.replace(old, new)
+                    renamed[old] = new
+                except OSError as e:
+                    log.warning("스냅샷 이름 변경 실패: %s", e)
+        self._emit("nvr_time", {"roi_id": roi.id, "nvr_time": f"{when:%Y-%m-%d %H:%M:%S}",
+                                "nvr_source": src.get("name", ""), "renamed": renamed})
+
+    def _notify_ng(self, cfg: AppConfig, roi: ROI, kind: str, detail: str, elapsed, frame, mask) -> None:
+        """NG 스냅샷 저장 + 알림. NVR 시간은 따로 읽어 파일 이름·팝업 시간을 나중에 고친다."""
+        pending = self._grab_time(cfg, roi)
+        view, raw = self._save_snapshot(roi, frame, mask)
+        self._fire(cfg, roi, kind, detail, elapsed, view, raw,
+                   nvr_pending=pending[0]["name"] if pending else "")
+        if pending:
+            src, rgb = pending
+            nvr_time.ocr_queue().submit(src, rgb, getattr(cfg, "playback_date", ""),
+                                        lambda when, text: self._apply_nvr_time(roi, src, view, raw, when, text))
 
     def _save_snapshot(self, roi: ROI, frame: np.ndarray, mask, nvr=(None, "")):
         """확대 보기용(불량 위치 빨간 표시 포함)과 원본(ROI 크기 – 샘플 등록용)을 저장. 반환: (보기용, 원본).
@@ -408,7 +428,7 @@ class Monitor(threading.Thread):
 
     def _fire(self, cfg: AppConfig, roi: ROI, kind: str, detail: str,
               elapsed: Optional[float], snapshot: Optional[str], raw: Optional[str] = None,
-              nvr=(None, "")) -> None:
+              nvr=(None, ""), nvr_pending: str = "") -> None:
         when = now_text()
         info = {
             "kind": kind, "roi_id": roi.id, "roi_name": roi.name,
@@ -417,6 +437,7 @@ class Monitor(threading.Thread):
             "time": when, "snapshot": snapshot, "raw_snapshot": raw,
             "roi_detector": roi.detector,
             "nvr_time": nvr[0].strftime("%Y-%m-%d %H:%M:%S") if nvr[0] else "", "nvr_source": nvr[1],
+            "nvr_pending": nvr_pending,
         }
         label = {"alert": "이상 감지", "repeat": "재알림", "recover": "복구"}[kind]
         log.warning("[%s] %s – %s", roi.name, label, detail)

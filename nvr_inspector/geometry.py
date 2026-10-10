@@ -170,3 +170,13 @@ def describe(roi) -> str:
     if angle:
         text += f" {angle:g}°"
     return text
+
+
+def drag_box(start, end, square: bool = False):
+    """마우스 드래그 시작·끝 점 → (x, y, w, h). square=True면 정사각형(원)으로 맞춘다."""
+    x0, y0 = start
+    dx, dy = end[0] - x0, end[1] - y0
+    if square:
+        side = max(abs(dx), abs(dy))
+        dx, dy = math.copysign(side, dx or 1), math.copysign(side, dy or 1)
+    return int(min(x0, x0 + dx)), int(min(y0, y0 + dy)), int(abs(dx)), int(abs(dy))

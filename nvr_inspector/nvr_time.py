@@ -146,6 +146,48 @@ def read(source: dict, rgb: np.ndarray, playback_date: str = "") -> Tuple[Option
     return parse(text, kind, playback_date), text
 
 
+class OcrQueue:
+    """시간 읽기(OCR)를 검출 스레드 밖에서 처리하는 대기열 (PowerShell 실행에 1~5초 걸리므로).
+    submit(src, rgb, playback_date, callback): 읽은 뒤 callback(when 또는 None, text)을 이 스레드에서 호출."""
+
+    def __init__(self, max_pending: int = 20):
+        import queue
+        import threading
+        self._q = queue.Queue(maxsize=max_pending)
+        self._thread = threading.Thread(target=self._run, name="nvr-ocr", daemon=True)
+        self._thread.start()
+
+    def submit(self, source: dict, rgb: np.ndarray, playback_date: str, callback) -> bool:
+        try:
+            self._q.put_nowait((source, rgb, playback_date, callback))
+            return True
+        except Exception:            # 대기열이 가득 차면 버림 (PC 시간 유지)
+            log.warning("NVR 시간 읽기 대기열이 가득 차 건너뜀")
+            return False
+
+    def _run(self):
+        while True:
+            source, rgb, playback_date, callback = self._q.get()
+            try:
+                when, text = read(source, rgb, playback_date)
+            except Exception as e:
+                when, text = None, str(e)
+            try:
+                callback(when, text)
+            except Exception:
+                log.exception("NVR 시간 적용 실패")
+
+
+_queue: Optional[OcrQueue] = None
+
+
+def ocr_queue() -> OcrQueue:
+    global _queue
+    if _queue is None:
+        _queue = OcrQueue()
+    return _queue
+
+
 def resolve(roi, sources: list) -> Optional[dict]:
     """ROI가 쓸 시간 표시 영역. roi.time_source: 'auto'(가장 가까운 영역) | 'pc' | 영역 이름."""
     choice = getattr(roi, "time_source", "auto") or "auto"

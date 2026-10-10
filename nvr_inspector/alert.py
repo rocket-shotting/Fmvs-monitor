@@ -175,6 +175,16 @@ class AlertPopup:
         self.win.lift()
         self.win.attributes("-topmost", True)
 
+    def update_nvr(self, nvr_time: str, source: str, renamed: dict):
+        """NVR 화면 시간을 다 읽은 뒤(1~5초 후): 팝업 시간을 NVR 시간으로, 바뀐 스냅샷 파일 경로 반영."""
+        pc = self.when_label.cget("text")
+        self.when_caption.configure(text=tr("NVR 화면 시간 ({source}) · PC {pc}", source=source, pc=pc[-8:]))
+        self.when_label.configure(text=nvr_time)
+        if self._snapshot in renamed:
+            self._snapshot = renamed[self._snapshot]
+        if self._raw in renamed:
+            self._raw = renamed[self._raw]
+
     def show_analysis(self, text: str):
         """LLM 자동 NG 분석 결과를 팝업 아래쪽에 덧붙인다."""
         self.body.configure(text=self.body.cget("text") + "\n\n" + tr("✦ AI 분석: {text}", text=text))

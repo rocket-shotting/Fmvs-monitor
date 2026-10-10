@@ -262,6 +262,13 @@ class VisionAgent:
         return None
 
     # ---------------- 지표 ----------------
+    def rename_snapshots(self, renamed: dict) -> None:
+        """스냅샷 파일 이름이 NVR 시간으로 바뀌면 기록(리포트 이미지)의 경로도 바꾼다."""
+        if not renamed:
+            return
+        self.timeline = deque(((t, n, k, d, renamed.get(snap, snap)) for t, n, k, d, snap in self.timeline),
+                              maxlen=self.timeline.maxlen)
+
     def kpis(self) -> dict:
         total = sum(s.inspections for s in self.stats.values())
         ng = sum(s.ng for s in self.stats.values())

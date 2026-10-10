@@ -572,6 +572,17 @@ def shape_check(app):
     img = Image.new("RGB", (root.winfo_screenwidth(), root.winfo_screenheight()), (30, 30, 40))
     sel = roi_editor.RegionSelector(root, img, 0, 0, existing=[other], single=False)
     root.update()
+    # 실제 마우스 동작(누르기 → 끌기 → 놓기)으로 그리기 – 놓을 때 오류가 났던 경로
+    ev = lambda x, y, state=0: types.SimpleNamespace(x=x, y=y, state=state, delta=0)   # noqa: E731
+    sel._on_press(ev(700, 300))
+    sel._on_drag(ev(760, 340))
+    sel._on_release(ev(780, 350))
+    assert len(sel.regions) == 1 and (sel.regions[0]["w"], sel.regions[0]["h"]) == (80, 50), sel.regions
+    sel._on_press(ev(900, 300))
+    sel._on_release(ev(960, 330, state=0x0001))          # Shift: 정사각형
+    assert (sel.regions[1]["w"], sel.regions[1]["h"]) == (60, 60), sel.regions[1]
+    sel._undo()
+    sel._undo()
     sel.add_region(100, 120, 200, 80)                    # 사각형
     sel.rotate_by(10)
     sel.rotate_by(-25)

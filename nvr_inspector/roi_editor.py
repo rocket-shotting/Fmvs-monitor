@@ -44,7 +44,8 @@ class Region:
 
 def _help() -> str:
     return tr("드래그: 영역 그리기 (Shift: 정사각형·원)  |  ⟳ 핸들·휠·←→: 회전 (Shift: 15°·5°)  |  "
-              "영역 안 드래그: 이동  |  우클릭·Ctrl+Z: 마지막 취소  |  Enter: 완료  |  Esc: 취소")
+              "영역 안 드래그: 이동  |  우클릭·Ctrl+Z: 마지막 취소  |  Enter: 완료  |  Esc: 취소\n"
+              "이 안내 막대: ✥ 끌어서 이동 · [▼ 아래로] · H: 숨기기/표시")
 
 
 class RegionSelector:
@@ -95,29 +96,95 @@ class RegionSelector:
         self.win.bind("<Right>", lambda e: self.rotate_by(5 if e.state & _SHIFT else 1))
         self.win.protocol("WM_DELETE_WINDOW", self._cancel)
 
-    # ---------- 안내 막대 ----------
+    # ---------- 안내 막대 (끌어서 이동 · 위/아래 전환 · H: 숨기기) ----------
     def _build_banner(self):
         primary_w = self.master.winfo_screenwidth()
         cx = -self.left + primary_w // 2
         title = tr("ROI 1개 지정 – 그린 뒤 회전·이동하고 Enter") if self.single else tr("여러 개 지정 가능")
-        frame = tk.Frame(self.canvas, bg="#212121", padx=10, pady=6)
-        row1 = tk.Frame(frame, bg="#212121")
+        frame = tk.Frame(self.canvas, bg="#212121", padx=10, pady=6, cursor="fleur")
+        row1 = tk.Frame(frame, bg="#212121", cursor="fleur")
         row1.pack(fill="x")
-        tk.Label(row1, text=tr("[ROI 지정] {title}", title=title), bg="#212121", fg="#ffeb3b",
-                 font=_FONT).pack(side="left")
+        grip = tk.Label(row1, text="✥", bg="#212121", fg="#9e9e9e", font=_FONT, cursor="fleur")
+        grip.pack(side="left", padx=(0, 6))
+        title_label = tk.Label(row1, text=tr("[ROI 지정] {title}", title=title), bg="#212121", fg="#ffeb3b",
+                               font=_FONT, cursor="fleur")
+        title_label.pack(side="left")
         self.mode_buttons = {}
         for mode, text in (("rect", tr("□ 사각형 (R)")), ("ellipse", tr("◯ 타원·원 (E)"))):
             btn = tk.Button(row1, text=text, width=12, relief="sunken" if mode == self.mode else "raised",
                             command=lambda m=mode: self.set_mode(m))
             btn.pack(side="left", padx=(10 if mode == "rect" else 2, 0))
             self.mode_buttons[mode] = btn
-        self.angle_label = tk.Label(row1, text="", bg="#212121", fg="white", font=_FONT, width=12)
+        self.angle_label = tk.Label(row1, text="", bg="#212121", fg="white", font=_FONT, width=12, cursor="fleur")
         self.angle_label.pack(side="left", padx=10)
         tk.Button(row1, text=tr("0°로"), width=5, command=lambda: self.set_angle(0.0)).pack(side="left")
         tk.Button(row1, text=tr("완료"), width=8, command=self._finish).pack(side="left", padx=(12, 4))
         tk.Button(row1, text=tr("취소"), width=8, command=self._cancel).pack(side="left")
-        tk.Label(frame, text=_help(), bg="#212121", fg="white", font=_SMALL).pack(anchor="w", pady=(4, 0))
-        self.canvas.create_window(cx, -self.top + 12, window=frame, anchor="n")
+        self.flip_btn = tk.Button(row1, text=tr("▼ 아래로"), width=8, command=self.flip_banner)
+        self.flip_btn.pack(side="left", padx=(12, 2))
+        tk.Button(row1, text=tr("숨기기 (H)"), width=9, command=self.toggle_banner).pack(side="left")
+        help_label = tk.Label(frame, text=_help(), bg="#212121", fg="white", font=_SMALL, cursor="fleur")
+        help_label.pack(anchor="w", pady=(4, 0))
+        self.banner_frame = frame
+        self.banner = self.canvas.create_window(cx, -self.top + 12, window=frame, anchor="n")
+        self.banner_at_bottom = False
+        self.banner_hidden = False
+        self._banner_drag = None
+        # 숨겼을 때 되살리는 안내 (캔버스 글자라 클릭을 막지 않음 – 그 위에도 ROI를 그릴 수 있다)
+        self.banner_hint = self.canvas.create_text(
+            cx, -self.top + 6, anchor="n", state="hidden", fill="#ffeb3b", font=_SMALL,
+            text=tr("H: 안내 막대 다시 표시  ·  Enter: 완료  ·  Esc: 취소"))
+        for widget in (frame, row1, grip, title_label, self.angle_label, help_label):
+            widget.bind("<ButtonPress-1>", self._banner_press)
+            widget.bind("<B1-Motion>", self._banner_move)
+            widget.bind("<ButtonRelease-1>", self._banner_release)
+        self.win.bind("<Key-h>", lambda _e: self.toggle_banner())
+        self.win.bind("<Key-H>", lambda _e: self.toggle_banner())
+
+    def _banner_press(self, e):
+        x, y = self.canvas.coords(self.banner)
+        self._banner_drag = (e.x_root, e.y_root, x, y)
+
+    def _banner_move(self, e):
+        if self._banner_drag is None:
+            return
+        x0, y0, bx, by = self._banner_drag
+        self.move_banner(bx + e.x_root - x0, by + e.y_root - y0)
+
+    def _banner_release(self, _e):
+        self._banner_drag = None
+
+    def move_banner(self, x: float, y: float):
+        """안내 막대를 캔버스 좌표 (x: 가운데, y: 위쪽)로 옮긴다 (화면 밖으로 나가지 않게)."""
+        self.banner_frame.update_idletasks()
+        fw, fh = self.banner_frame.winfo_reqwidth(), self.banner_frame.winfo_reqheight()
+        cw = max(self.canvas.winfo_width(), int(self.canvas.cget("width")))
+        ch = max(self.canvas.winfo_height(), int(self.canvas.cget("height")))
+        x = min(max(x, fw / 2), max(fw / 2, cw - fw / 2))
+        y = min(max(y, 0), max(0, ch - fh))
+        self.canvas.coords(self.banner, x, y)
+
+    def flip_banner(self):
+        """주 모니터 위쪽 ↔ 아래쪽 전환."""
+        self.banner_frame.update_idletasks()
+        fh = self.banner_frame.winfo_reqheight()
+        x, _y = self.canvas.coords(self.banner)
+        self.banner_at_bottom = not self.banner_at_bottom
+        if self.banner_at_bottom:
+            y = -self.top + self.master.winfo_screenheight() - fh - 60     # 작업 표시줄 위
+        else:
+            y = -self.top + 12
+        self.move_banner(x, y)
+        self.flip_btn.configure(text=tr("▲ 위로") if self.banner_at_bottom else tr("▼ 아래로"))
+
+    def toggle_banner(self):
+        """안내 막대 숨기기/보이기 (H). 숨긴 동안 그 자리에도 ROI를 그릴 수 있다."""
+        self.banner_hidden = not self.banner_hidden
+        self.canvas.itemconfigure(self.banner, state="hidden" if self.banner_hidden else "normal")
+        if self.banner_hidden:
+            x, y = self.canvas.coords(self.banner)
+            self.canvas.coords(self.banner_hint, x, y)
+        self.canvas.itemconfigure(self.banner_hint, state="normal" if self.banner_hidden else "hidden")
 
     def set_mode(self, mode: str):
         """그릴 모양 선택. 1개 모드(위치 재지정)에서는 지금 영역의 모양도 바꾼다.

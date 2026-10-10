@@ -116,9 +116,14 @@ EN = {
     "각도 {angle}°": "Angle {angle}°",
     "각도(°)": "Angle (°)",
     "각도는 숫자로 입력하세요.": "Enter the angle as a number.",
-    "드래그: 영역 그리기 (Shift: 정사각형·원)  |  ⟳ 핸들·휠·←→: 회전 (Shift: 15°·5°)  |  영역 안 드래그: 이동  |  우클릭·Ctrl+Z: 마지막 취소  |  Enter: 완료  |  Esc: 취소":
+    "드래그: 영역 그리기 (Shift: 정사각형·원)  |  ⟳ 핸들·휠·←→: 회전 (Shift: 15°·5°)  |  영역 안 드래그: 이동  |  우클릭·Ctrl+Z: 마지막 취소  |  Enter: 완료  |  Esc: 취소\n이 안내 막대: ✥ 끌어서 이동 · [▼ 아래로] · H: 숨기기/표시":
         "Drag: draw (Shift: square/circle)  |  ⟳ handle·wheel·←→: rotate (Shift: 15°·5°)  |  "
-        "Drag inside: move  |  Right-click·Ctrl+Z: undo  |  Enter: done  |  Esc: cancel",
+        "Drag inside: move  |  Right-click·Ctrl+Z: undo  |  Enter: done  |  Esc: cancel\n"
+        "This bar: drag ✥ to move · [▼ Down] · H: hide/show",
+    "▼ 아래로": "▼ Down",
+    "▲ 위로": "▲ Up",
+    "숨기기 (H)": "Hide (H)",
+    "H: 안내 막대 다시 표시  ·  Enter: 완료  ·  Esc: 취소": "H: show the bar again  ·  Enter: done  ·  Esc: cancel",
     "모양": "Shape",
     "모양·각도는 [⌖ 위치 재지정]에서 마우스로도 바꿀 수 있습니다 (원: 타원 + 폭=높이)":
         "Shape and angle can also be set with the mouse in [⌖ Reposition] (circle: ellipse with width = height)",

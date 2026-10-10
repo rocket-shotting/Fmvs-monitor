@@ -572,6 +572,27 @@ def shape_check(app):
     img = Image.new("RGB", (root.winfo_screenwidth(), root.winfo_screenheight()), (30, 30, 40))
     sel = roi_editor.RegionSelector(root, img, 0, 0, existing=[other], single=False)
     root.update()
+    # 안내 막대: 끌어서 이동 · 아래로 전환 · 숨기기 (가린 곳에도 ROI를 지정할 수 있어야 함)
+    bx, by = sel.canvas.coords(sel.banner)
+    drag = lambda x, y: types.SimpleNamespace(x_root=x, y_root=y)   # noqa: E731
+    sel._banner_press(drag(100, 100))
+    sel._banner_move(drag(160, 400))
+    sel._banner_release(drag(160, 400))
+    nx, ny = sel.canvas.coords(sel.banner)
+    assert ny > by + 200, (by, ny)
+    sel.move_banner(-5000, -5000)                        # 화면 밖으로 나가지 않음
+    mx, my = sel.canvas.coords(sel.banner)
+    assert mx > 0 and my == 0, (mx, my)
+    sel.flip_banner()
+    assert sel.banner_at_bottom and sel.canvas.coords(sel.banner)[1] > root.winfo_screenheight() / 2
+    sel.flip_banner()
+    assert not sel.banner_at_bottom
+    sel.toggle_banner()
+    assert sel.canvas.itemcget(sel.banner, "state") == "hidden"
+    assert sel.canvas.itemcget(sel.banner_hint, "state") == "normal"
+    sel.toggle_banner()
+    assert sel.canvas.itemcget(sel.banner, "state") == "normal"
+    root.update()
     # 실제 마우스 동작(누르기 → 끌기 → 놓기)으로 그리기 – 놓을 때 오류가 났던 경로
     ev = lambda x, y, state=0: types.SimpleNamespace(x=x, y=y, state=state, delta=0)   # noqa: E731
     sel._on_press(ev(700, 300))

@@ -30,7 +30,7 @@ def language() -> str:
     return _lang
 
 
-def tr(text: str, **values) -> str:
+def tr(text: str, /, **values) -> str:
     out = _en.get(text, text) if _lang == "en" else text
     if values:
         try:

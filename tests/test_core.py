@@ -1058,6 +1058,20 @@ class NgAnalysisTests(unittest.TestCase):
         self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
 
 
+class I18nTests(unittest.TestCase):
+    def tearDown(self):
+        import i18n
+        i18n.set_language("ko")
+
+    def test_placeholder_named_text(self):
+        # 'text' 자리 표시자가 tr()의 첫 인자와 겹쳐 TypeError가 나던 문제
+        import i18n
+        for lang in ("ko", "en"):
+            i18n.set_language(lang)
+            self.assertTrue(i18n.tr("✦ AI 분석: {text}", text="원인").endswith("원인"))
+            self.assertIn("탭", i18n.tr("✦ AI 분석 {title}: {text}", title="탭", text="x"))
+
+
 class NotifierTests(unittest.TestCase):
     def test_payload(self):
         p = notifier.build_payload("alert", roi_name="1번", detector_label="흑화면", detail="99%",

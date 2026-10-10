@@ -46,6 +46,7 @@ class ROI:
     still_frames: int = 2              # 연속 몇 번 변화가 없어야 정지로 확정할지
     shape: str = "rect"                # 감시 영역 모양: rect(사각형) | ellipse(타원·원)
     angle: float = 0.0                 # 회전 각도(도, 시계 방향) – 상자 (x, y, w, h)를 중심 기준으로 돌림
+    time_source: str = "auto"         # 스냅샷 시간: auto(가장 가까운 NVR 시간 표시) | pc | 시간 표시 영역 이름
     wall: list = field(default_factory=list)   # 카메라 월 카드 배치 [x, y, 화면 폭, 화면 높이], 비우면 자동 배치
 
     def center(self):
@@ -87,6 +88,10 @@ class AppConfig:
     llm_url: str = "http://127.0.0.1:11434/v1"   # OpenAI 호환 API 주소 (localhost·사내망만 허용)
     llm_model: str = ""                # 예: qwen3:4b-instruct
     llm_api_key: str = ""              # 서버가 요구할 때만
+    llm_auto_ng: bool = True           # NG가 나면 LLM이 자동으로 원인 분석 (ROI당 5분에 1번)
+    llm_send_image: bool = False       # NG 스냅샷도 LLM에 보냄 (비전 모델 필요, 이 PC/사내 서버로만)
+    time_sources: list = field(default_factory=list)   # NVR 화면 시간 표시 위치 [{name, kind(live|search), x, y, w, h}]
+    playback_date: str = ""            # 재생(SEARCH) 화면 날짜 YYYY-MM-DD (비우면 오늘)
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)
 
@@ -139,6 +144,7 @@ def roi_from_dict(d: dict) -> ROI:
     shape = str(d.get("shape") or "rect")
     roi.shape = shape if shape in ("rect", "ellipse") else "rect"
     roi.angle = round(_to_float(d.get("angle"), 0.0) % 360.0, 2)
+    roi.time_source = str(d.get("time_source") or "auto")
     roi.wall = parse_wall(d.get("wall"))
     return roi
 
@@ -185,6 +191,11 @@ def config_from_dict(d: dict) -> AppConfig:
     cfg.llm_url = str(d.get("llm_url") or "http://127.0.0.1:11434/v1").strip()
     cfg.llm_model = str(d.get("llm_model") or "").strip()
     cfg.llm_api_key = str(d.get("llm_api_key") or "").strip()
+    cfg.llm_auto_ng = bool(d.get("llm_auto_ng", True))
+    cfg.llm_send_image = bool(d.get("llm_send_image", False))
+    import nvr_time
+    cfg.time_sources = nvr_time.parse_sources(d.get("time_sources"))
+    cfg.playback_date = str(d.get("playback_date") or "").strip()
     cfg.pc_label = str(d.get("pc_label") or socket.gethostname())
     seen = set()
     for item in d.get("rois") or []:

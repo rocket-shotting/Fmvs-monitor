@@ -1,6 +1,7 @@
 """공통 설정 창 (검사 주기, Teams 공통 Webhook, 팝업/소리, 자동 시작)."""
 import copy
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Optional
 
@@ -8,7 +9,7 @@ import notifier
 import config as cfgmod
 from config import AppConfig
 from i18n import tr
-from ui_util import modal
+from ui_util import hidden_windows, modal
 
 _MINI_POSITIONS = {"auto": "자동 (ROI와 덜 겹치는 쪽)", "right": "오른쪽 하단", "left": "왼쪽 하단"}
 
@@ -24,12 +25,15 @@ class SettingsDialog:
         top.protocol("WM_DELETE_WINDOW", self._cancel)
         body = ttk.Frame(top, padding=12)
         body.pack(fill="both", expand=True)
-        cols = ttk.Frame(body)
-        cols.pack(fill="both", expand=True)
-        left = ttk.Frame(cols)
-        left.pack(side="left", fill="both", expand=True, anchor="n")
-        right = ttk.Frame(cols)
-        right.pack(side="left", fill="both", expand=True, anchor="n", padx=(12, 0))
+        tabs = ttk.Notebook(body)            # 항목이 많아 탭으로 나눔 (작은 화면에서도 창이 넘치지 않도록)
+        tabs.pack(fill="both", expand=True)
+        left = ttk.Frame(tabs, padding=8)
+        right = ttk.Frame(tabs, padding=8)
+        time_tab = ttk.Frame(tabs, padding=8)
+        tabs.add(left, text=tr("  일반 · 알림  "))
+        tabs.add(right, text=tr("  에이전트 · AI  "))
+        tabs.add(time_tab, text=tr("  NVR 화면 시간  "))
+        self.tabs = tabs
 
         general = ttk.LabelFrame(left, text=tr("검출"), padding=8)
         general.pack(fill="x", pady=(0, 8))
@@ -111,6 +115,7 @@ class SettingsDialog:
                   foreground="#555555", wraplength=560, justify="left").grid(row=4, column=0, columnspan=2, sticky="w")
 
         self._build_llm(right)
+        self._build_time(time_tab)
 
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(10, 0))
@@ -133,6 +138,12 @@ class SettingsDialog:
                  (tr("API 키 (필요할 때만)"), self.v_llm_key, 24, "•")), start=1):
             ttk.Label(box, text=label).grid(row=i, column=0, sticky="w", pady=2)
             ttk.Entry(box, textvariable=var, width=width, show=show).grid(row=i, column=1, sticky="w", padx=6)
+        self.v_llm_auto = tk.BooleanVar(value=c.llm_auto_ng)
+        self.v_llm_image = tk.BooleanVar(value=c.llm_send_image)
+        ttk.Checkbutton(box, text=tr("NG가 나면 자동으로 원인 분석 (ROI당 5분에 1번 · 팝업·AI 의견 탭에 표시)"),
+                        variable=self.v_llm_auto).grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(box, text=tr("NG 스냅샷 이미지도 함께 보내기 (비전 모델 필요 · 예: qwen2.5vl)"),
+                        variable=self.v_llm_image).grid(row=7, column=0, columnspan=2, sticky="w")
         test = ttk.Frame(box)
         test.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Button(test, text=tr("연결 테스트"), command=self._test_llm).pack(side="left")
@@ -140,9 +151,114 @@ class SettingsDialog:
         self.llm_status.pack(side="left", padx=8)
         ttk.Label(box, text=tr("예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen3:4b-instruct\n"
                                "LM Studio → http://127.0.0.1:1234/v1\n"
-                               "보내는 내용: ROI별 판정 통계·의견 목록(텍스트)만. 화면·이미지는 보내지 않습니다.\n"
+                               "보내는 내용: ROI별 판정 통계·의견 목록(텍스트). 아래에서 켜면 NG 스냅샷도 (이 PC/사내 서버로만).\n"
                                "외부 인터넷 주소는 보안상 사용할 수 없습니다."),
                   foreground="#555555", justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_time(self, parent):
+        """NVR 화면의 시간 글자 위치 등록 – NG 스냅샷 파일 이름과 팝업에 NVR 시간을 쓴다."""
+        self.sources = [dict(src) for src in self.cfg.time_sources]
+        ttk.Label(parent, text=tr("NG 스냅샷 시간을 PC 시간 대신 NVR 화면에 표시된 시간으로 저장합니다.\n"
+                                  "· 라이브(LIVE): 화면 오른쪽 위 흰 글씨 (예: 2026-10-10 10:56:49)\n"
+                                  "· 재생(SEARCH): 화면 왼쪽 아래 노란 글씨 (예: 08:46:36) – 날짜는 아래 '재생 날짜'\n"
+                                  "시간 글자만 딱 맞게 사각형으로 지정하세요. ROI마다 가장 가까운 시간 위치를 자동으로 씁니다\n"
+                                  "(ROI 설정에서 직접 고를 수도 있음). 읽지 못하면 PC 시간으로 저장합니다 (파일 이름 끝 _PC)."),
+                  foreground="#555555", justify="left").pack(anchor="w")
+        row = ttk.Frame(parent)
+        row.pack(fill="both", expand=True, pady=(8, 0))
+        self.src_list = tk.Listbox(row, height=6, width=56, exportselection=False)
+        self.src_list.pack(side="left", fill="both", expand=True)
+        btns = ttk.Frame(row)
+        btns.pack(side="left", fill="y", padx=(8, 0))
+        ttk.Button(btns, text=tr("＋ 라이브 시간 위치"), command=lambda: self._add_source("live")).pack(fill="x")
+        ttk.Button(btns, text=tr("＋ 재생 시간 위치"), command=lambda: self._add_source("search")).pack(fill="x", pady=4)
+        ttk.Button(btns, text=tr("읽기 테스트"), command=self._test_source).pack(fill="x")
+        ttk.Button(btns, text=tr("삭제"), command=self._delete_source).pack(fill="x", pady=4)
+        self.src_status = ttk.Label(parent, text="", foreground="#555555", wraplength=520, justify="left")
+        self.src_status.pack(anchor="w", pady=(6, 0))
+        date_row = ttk.Frame(parent)
+        date_row.pack(anchor="w", pady=(8, 0))
+        self.v_playback = tk.StringVar(value=self.cfg.playback_date)
+        ttk.Label(date_row, text=tr("재생 날짜 (YYYY-MM-DD, 비우면 오늘)")).pack(side="left")
+        ttk.Entry(date_row, textvariable=self.v_playback, width=12).pack(side="left", padx=6)
+        self._refresh_sources()
+
+    def _refresh_sources(self):
+        self.src_list.delete(0, "end")
+        for src in self.sources:
+            kind = tr("라이브") if src["kind"] == "live" else tr("재생")
+            self.src_list.insert("end", f"{src['name']}  [{kind}]  {src['x']},{src['y']}  {src['w']}×{src['h']}")
+
+    def _add_source(self, kind: str):
+        import roi_editor
+        from capture import Grabber
+        try:
+            with hidden_windows(self.top, self.master, delay=0.4):
+                with Grabber() as g:
+                    image, left, top = g.grab_virtual_screen()
+            regions = roi_editor.select_regions(self.master, image, left, top, single=True)
+        except Exception as e:
+            messagebox.showerror(tr("오류"), str(e), parent=self.top)
+            regions = None
+        self._regrab()
+        if not regions:
+            return
+        r = regions[0]
+        base = tr("라이브") if kind == "live" else tr("재생")
+        n = 1
+        while any(s["name"] == f"{base} {n}" for s in self.sources):
+            n += 1
+        self.sources.append({"name": f"{base} {n}", "kind": kind, "x": r.x, "y": r.y, "w": r.w, "h": r.h})
+        self._refresh_sources()
+        self.src_list.selection_clear(0, "end")
+        self.src_list.selection_set("end")
+        self._test_source()
+
+    def _selected_source(self):
+        sel = self.src_list.curselection()
+        return self.sources[sel[0]] if sel else None
+
+    def _delete_source(self):
+        src = self._selected_source()
+        if src is not None:
+            self.sources.remove(src)
+            self._refresh_sources()
+
+    def _test_source(self):
+        import nvr_time
+        from capture import Grabber
+        src = self._selected_source()
+        if src is None:
+            return
+        self.src_status.configure(text=tr("읽는 중…"), foreground="#555555")
+        self.top.config(cursor="watch")
+        self.top.update()
+        try:
+            with hidden_windows(self.top, self.master, delay=0.3):
+                with Grabber() as g:
+                    rgb = g.grab(src["x"], src["y"], src["w"], src["h"])
+            when, text = nvr_time.read(src, rgb, self.v_playback.get())
+        except Exception as e:
+            when, text = None, str(e)
+        finally:
+            self.top.config(cursor="")
+            self._regrab()
+        if when:
+            self.src_status.configure(text=tr("✔ {name}: {when}  (읽은 글자: {text})", name=src["name"],
+                                              when=when.strftime("%Y-%m-%d %H:%M:%S"), text=text[:40]),
+                                      foreground="#1b5e20")
+        else:
+            self.src_status.configure(text=tr("⚠ {name}: 시간을 읽지 못했습니다 (읽은 글자: '{text}'). 시간 글자만 "
+                                              "딱 맞게 다시 지정해 보세요.", name=src["name"], text=text[:40]),
+                                      foreground="#b71c1c")
+
+    def _regrab(self):
+        try:
+            self.top.lift()
+            self.top.grab_set()
+            self.top.focus_force()
+        except tk.TclError:
+            pass
 
     def _test_llm(self):
         import llm
@@ -222,6 +338,17 @@ class SettingsDialog:
         c.llm_url = self.v_llm_url.get().strip()
         c.llm_model = self.v_llm_model.get().strip()
         c.llm_api_key = self.v_llm_key.get().strip()
+        c.llm_auto_ng = self.v_llm_auto.get()
+        c.llm_send_image = self.v_llm_image.get()
+        c.time_sources = [dict(src) for src in self.sources]
+        playback = self.v_playback.get().strip()
+        if playback:
+            try:
+                datetime.strptime(playback, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showerror(tr("입력 오류"), tr("재생 날짜는 2026-10-09 형식으로 입력하세요."), parent=self.top)
+                return
+        c.playback_date = playback
         if c.llm_enabled:
             import llm
             error = llm.LocalLLM(c.llm_url, c.llm_model, c.llm_api_key).check()

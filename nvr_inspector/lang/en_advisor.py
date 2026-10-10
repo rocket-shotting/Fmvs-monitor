@@ -123,4 +123,43 @@ EN = {
     "모양·각도는 [⌖ 위치 재지정]에서 마우스로도 바꿀 수 있습니다 (원: 타원 + 폭=높이)":
         "Shape and angle can also be set with the mouse in [⌖ Reposition] (circle: ellipse with width = height)",
     "새 ROI {n}  ({w}×{h}{angle})": "New ROI {n}  ({w}×{h}{angle})",
+    # NVR 화면 시간 · 자동 NG 분석
+    "NG 스냅샷 시간을 PC 시간 대신 NVR 화면에 표시된 시간으로 저장합니다.\n· 라이브(LIVE): 화면 오른쪽 위 흰 글씨 (예: 2026-10-10 10:56:49)\n· 재생(SEARCH): 화면 왼쪽 아래 노란 글씨 (예: 08:46:36) – 날짜는 아래 '재생 날짜'\n시간 글자만 딱 맞게 사각형으로 지정하세요. ROI마다 가장 가까운 시간 위치를 자동으로 씁니다\n(ROI 설정에서 직접 고를 수도 있음). 읽지 못하면 PC 시간으로 저장합니다 (파일 이름 끝 _PC).":
+        "NG snapshots are saved with the time shown on the NVR screen instead of the PC time.\n"
+        "· LIVE: white text at the top right (e.g. 2026-10-10 10:56:49)\n"
+        "· SEARCH: yellow text at the bottom left (e.g. 08:46:36) – date from 'Playback date' below\n"
+        "Draw a tight box around the time text only. Each ROI uses the nearest time area automatically\n"
+        "(or choose one in ROI settings). If it can't be read, the PC time is used (file name ends with _PC).",
+    "⚠ {name}: 시간을 읽지 못했습니다 (읽은 글자: '{text}'). 시간 글자만 딱 맞게 다시 지정해 보세요.":
+        "⚠ {name}: could not read the time (read: '{text}'). Try drawing the box tightly around the time text.",
+    "  NVR 화면 시간  ": "  NVR screen time  ",
+    "  에이전트 · AI  ": "  Agent · AI  ",
+    "  일반 · 알림  ": "  General · Alerts  ",
+    "  💡 AI 의견  ": "  💡 AI Advisor  ",
+    "  💡 AI 의견 · 주의 {n}  ": "  💡 AI Advisor · {n} to check  ",
+    "(이 모델은 이미지를 받지 못해 숫자 자료만으로 분석)": "(this model can't take images – analyzed from data only)",
+    "NG 스냅샷 이미지도 함께 보내기 (비전 모델 필요 · 예: qwen2.5vl)":
+        "Also send the NG snapshot image (needs a vision model · e.g. qwen2.5vl)",
+    "NG가 나면 자동으로 원인 분석 (ROI당 5분에 1번 · 팝업·AI 의견 탭에 표시)":
+        "Analyze causes automatically on NG (once per 5 min per ROI · shown in popup and AI Advisor tab)",
+    "NVR 화면 시간 ({source}) · PC {pc}": "NVR screen time ({source}) · PC {pc}",
+    "PC 시간": "PC time",
+    "[{name}] NG 분석 · {when}": "[{name}] NG analysis · {when}",
+    "✔ {name}: {when}  (읽은 글자: {text})": "✔ {name}: {when}  (read: {text})",
+    "✦ AI 분석 {title}: {text}": "✦ AI analysis {title}: {text}",
+    "✦ AI 분석: {text}": "✦ AI analysis: {text}",
+    "라이브": "Live",
+    "재생": "Playback",
+    "스냅샷 시간": "Snapshot time",
+    "예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen3:4b-instruct\nLM Studio → http://127.0.0.1:1234/v1\n보내는 내용: ROI별 판정 통계·의견 목록(텍스트). 아래에서 켜면 NG 스냅샷도 (이 PC/사내 서버로만).\n외부 인터넷 주소는 보안상 사용할 수 없습니다.":
+        "e.g. Ollama → http://127.0.0.1:11434/v1 · model qwen3:4b-instruct\nLM Studio → http://127.0.0.1:1234/v1\n"
+        "Sent: per-ROI judgment statistics and recommendations (text); NG snapshots only if enabled below "
+        "(to this PC / in-house server only).\nExternal internet addresses are blocked for security.",
+    "읽기 테스트": "Read test",
+    "읽는 중…": "Reading…",
+    "자동 (가장 가까운 NVR 시간)": "Auto (nearest NVR time)",
+    "재생 날짜 (YYYY-MM-DD, 비우면 오늘)": "Playback date (YYYY-MM-DD, empty = today)",
+    "재생 날짜는 2026-10-09 형식으로 입력하세요.": "Enter the playback date like 2026-10-09.",
+    "＋ 라이브 시간 위치": "+ Live time area",
+    "＋ 재생 시간 위치": "+ Playback time area",
 }

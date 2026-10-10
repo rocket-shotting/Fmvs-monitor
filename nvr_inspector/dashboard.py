@@ -552,7 +552,7 @@ class AdvisorPanel(tk.Frame):
 
     def show_answer(self, question: str, text: str, error: bool = False):
         self.answers.insert(0, (question, text, error))
-        del self.answers[5:]
+        del self.answers[10:]
         self._render()
 
     def set_busy(self, busy: bool):

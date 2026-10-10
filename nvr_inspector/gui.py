@@ -81,6 +81,9 @@ class App:
         self._advisor_busy = False
         self._llm_busy = False
         self._selfcheck_cache: Dict[str, tuple] = {}
+        self._ai_busy = False                         # LLM 자동 NG 분석 중
+        self._ai_queue: list = []                     # 대기 중인 NG 분석 (최대 3건)
+        self._ai_last: Dict[str, float] = {}          # ROI별 마지막 자동 분석 시각 (5분에 1번)
 
         self._build()
         self.agent.listeners.append(self.feed.add)
@@ -181,7 +184,7 @@ class App:
         self.advisor_panel = db.AdvisorPanel(tabs, self.advice_hidden, on_action=self._advice_action,
                                              on_refresh=lambda: self._run_advisor(force=True),
                                              on_ask=self._ask_llm, on_summary=self._llm_summary)
-        tabs.add(self.advisor_panel, text=tr("  💡 의견  "))
+        tabs.add(self.advisor_panel, text=tr("  💡 AI 의견  "))
         self.side_tabs = tabs
         if self._advice is not None:
             self._show_advice()
@@ -437,7 +440,8 @@ class App:
             roi = ROI(name=f"ROI {base + i}", x=reg.x, y=reg.y, w=reg.w, h=reg.h, shape=reg.shape, angle=reg.angle,
                       expected_process=proc or "")
             result = roi_dialog.edit_roi(self.root, roi, tr("새 ROI 설정 ({i}/{total}) – 취소하면 이 ROI는 추가하지 않음",
-                                                                    i=i, total=len(rects)))
+                                                                    i=i, total=len(rects)),
+                                         time_sources=self.cfg.time_sources)
             if result is None:
                 continue
             self.cfg.rois.append(result)
@@ -449,7 +453,8 @@ class App:
         roi = self._one_selected()
         if roi is None:
             return
-        result = roi_dialog.edit_roi(self.root, roi, tr("ROI 설정 – {name}", name=roi.name))
+        result = roi_dialog.edit_roi(self.root, roi, tr("ROI 설정 – {name}", name=roi.name),
+                                     time_sources=self.cfg.time_sources)
         if result is None:
             return
         note = ""
@@ -513,7 +518,7 @@ class App:
         dup.id = cfgmod.new_roi_id()
         dup.wall = []
         dup.name = tr("{name} 복사본", name=roi.name)
-        result = roi_dialog.edit_roi(self.root, dup, tr("ROI 복제"))
+        result = roi_dialog.edit_roi(self.root, dup, tr("ROI 복제"), time_sources=self.cfg.time_sources)
         if result is not None:
             if (result.x, result.y, result.w, result.h, result.angle, result.shape) == \
                     (roi.x, roi.y, roi.w, roi.h, roi.angle, roi.shape):
@@ -827,8 +832,9 @@ class App:
         client = llm.from_config(self.cfg)
         self.advisor_panel.show(items, client.model if client and client.model else None, when)
         _n, important = self.advisor_panel.visible_count()
-        self.side_tabs.tab(self.advisor_panel, text=tr("  💡 의견 {n}  ", n=important) if important
-                           else tr("  💡 의견  "))
+        # 숫자 = 지금 확인이 필요한 긴급·주의 의견 수
+        self.side_tabs.tab(self.advisor_panel, text=tr("  💡 AI 의견 · 주의 {n}  ", n=important) if important
+                           else tr("  💡 AI 의견  "))
         if announce:
             new = [a for a in items if a.level in ("critical", "warn") and a.key not in self._advice_known]
             self._advice_known = {a.key for a in items}
@@ -879,6 +885,60 @@ class App:
             self.events.put(("llm", question, answer, error))
 
         threading.Thread(target=work, name="llm", daemon=True).start()
+
+    AI_INTERVAL = 300.0       # 같은 ROI의 자동 NG 분석 최소 간격(초)
+
+    def _auto_analyze(self, info: dict):
+        """NG가 나면 LLM이 자동으로 현상·원인·조치를 분석 (LLM 설정 시, ROI당 5분에 1번, 대기 최대 3건)."""
+        client = llm.from_config(self.cfg)
+        if client is None or not self.cfg.llm_auto_ng or info.get("kind") not in ("alert", "repeat"):
+            return
+        now = time.monotonic()
+        if now - self._ai_last.get(info["roi_id"], -1e9) < self.AI_INTERVAL:
+            return
+        self._ai_last[info["roi_id"]] = now
+        if len(self._ai_queue) >= 3:
+            self._ai_queue.pop(0)
+        self._ai_queue.append(dict(info))
+        if not self._ai_busy:
+            self._next_ai()
+
+    def _next_ai(self):
+        if self._ai_busy or not self._ai_queue:
+            return
+        client = llm.from_config(self.cfg)
+        if client is None:
+            self._ai_queue.clear()
+            return
+        info = self._ai_queue.pop(0)
+        self._ai_busy = True
+        roi = self.cfg.find(info["roi_id"])
+        st = copy.deepcopy(self.agent.stats.get(info["roi_id"]))
+        hourly = dict(self.agent.hourly_series(12, info["roi_id"]))
+        counts = {c: len(paths.reference_paths(info["roi_id"], c)) for c in detectors.SAMPLE_CLASSES}
+        cutoff = time.time() - 60
+        others = sorted({self.agent.names.get(rid, rid) for rid, s in self.agent.stats.items()
+                         if rid != info["roi_id"] and s.last_ng and s.last_ng >= cutoff})
+        data = advisormod.ng_context(info, roi, st, hourly, counts, others)
+        image = llm.jpeg_bytes(info["snapshot"]) if self.cfg.llm_send_image and info.get("snapshot") else None
+        when = info.get("nvr_time") or info.get("time", "")
+        title = tr("[{name}] NG 분석 · {when}", name=info["roi_name"], when=when[-8:])
+
+        def work():
+            try:
+                try:
+                    text = client.chat(data, system=llm.ng_system_prompt(), image_jpeg=image)
+                except llm.LLMError:
+                    if image is None:
+                        raise
+                    text = client.chat(data, system=llm.ng_system_prompt()) + "\n" + \
+                        tr("(이 모델은 이미지를 받지 못해 숫자 자료만으로 분석)")
+                result = (text, False)
+            except Exception as e:
+                result = (str(e), True)
+            self.events.put(("ai_ng", info["roi_id"], title, result[0], result[1]))
+
+        threading.Thread(target=work, name="ai-ng", daemon=True).start()
 
     def _llm_summary(self):
         self._ask_llm(tr("현재 상태를 종합해서 우선순위가 높은 운영 의견을 주세요."))
@@ -982,6 +1042,7 @@ class App:
                                           name=info["roi_name"], count=count, need=need))
                     self._run_actions(actions)
                     self._refresh_trends()
+                    self._auto_analyze(info)
                 elif kind == "recover":
                     info = event[1]
                     self.log("info", tr("✅ [{name}] 정상 복구 – {detail}", name=info["roi_name"], detail=info["detail"]))
@@ -993,6 +1054,17 @@ class App:
                     self._advisor_busy = False
                     self._advice = (event[1], event[2])
                     self._show_advice(announce=True)
+                elif kind == "ai_ng":
+                    _k, roi_id, title, text, error = event
+                    self._ai_busy = False
+                    self.advisor_panel.show_answer(title, text, error)
+                    popup = self.alerts.popups.get(roi_id)
+                    if popup is not None and not error:
+                        popup.show_analysis(text)
+                    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+                    self.agent.say("warn" if error else "think", tr("✦ AI 분석 {title}: {text}", title=title,
+                                                                   text=first[:120]))
+                    self._next_ai()
                 elif kind == "llm":
                     self._llm_busy = False
                     self.advisor_panel.set_busy(False)

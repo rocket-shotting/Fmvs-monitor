@@ -156,6 +156,10 @@ class AlertPopup:
                     btn.configure(state="normal", text=self.reg_labels[cls])
                     btn.pack(side="left", padx=(10 if i == 0 else 2, 2))
         self.when_label.configure(text=info["time"])
+        if not recovered and info.get("nvr_time"):        # NVR 화면 시간을 읽었으면 그것을 크게, PC 시간은 작게
+            self.when_caption.configure(text=tr("NVR 화면 시간 ({source}) · PC {pc}", source=info.get("nvr_source", ""),
+                                                pc=info["time"][-8:]))
+            self.when_label.configure(text=info["nvr_time"])
         older = list(self.history)[1:]
         if not recovered:
             self.total = info.get("total_ng", self.count)
@@ -163,10 +167,18 @@ class AlertPopup:
             head = tr("이 ROI 누적 탐지 {n}회", n=getattr(self, "total", self.count))
             self.history_label.configure(text=head + (tr(" · 이전 탐지: {times}", times=", ".join(t[-8:] for t in older))
                                                       if older else ""))
+        if not recovered and info.get("ai"):
+            lines.append("")
+            lines.append(tr("✦ AI 분석: {text}", text=info["ai"]))
         self.body.configure(text="\n".join(lines))
         self.win.deiconify()
         self.win.lift()
         self.win.attributes("-topmost", True)
+
+    def show_analysis(self, text: str):
+        """LLM 자동 NG 분석 결과를 팝업 아래쪽에 덧붙인다."""
+        self.body.configure(text=self.body.cget("text") + "\n\n" + tr("✦ AI 분석: {text}", text=text))
+        self.place()
 
     def _register(self, cls: str):
         if not self._raw:

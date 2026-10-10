@@ -178,3 +178,21 @@ def summary_text(rois, stats, samples, advice: List[Advice], ctx: Context) -> st
     lines.append("current findings:")
     lines += [f"  [{a.level}] {a.title} – {a.body}" for a in advice] or ["  (none)"]
     return "\n".join(lines)
+
+
+def ng_context(info: dict, roi, st, hourly: Dict[str, int], samples: Dict[str, int], others: List[str]) -> str:
+    """NG 1건 분석 자료 (텍스트). others: 최근 1분 안에 함께 NG가 난 다른 ROI 이름."""
+    lines = [f"ROI: {info.get('roi_name')} / detector: {info.get('detector')}",
+             f"result: {info.get('detail')}",
+             f"time: NVR {info.get('nvr_time') or '-'} (source {info.get('nvr_source') or 'PC'}), PC {info.get('time')}",
+             f"consecutive NG: {info.get('consecutive', 1)}"]
+    if roi is not None:
+        lines.append(f"roi: shape={getattr(roi, 'shape', 'rect')} angle={getattr(roi, 'angle', 0)} "
+                     f"size={roi.w}x{roi.h} still_only={roi.still_only}")
+    lines.append(f"samples ok/ng/ignore: {samples.get('ok', 0)}/{samples.get('ng', 0)}/{samples.get('skip', 0)}")
+    if st is not None:
+        lines.append(f"since start: judged={st.ok + st.ng} ok={st.ok} ng={st.ng}")
+    if hourly:
+        lines.append("NG per hour (last 12h, oldest first): " + ", ".join(f"{h}h={c}" for h, c in hourly.items()))
+    lines.append("other ROIs NG within 1 min: " + (", ".join(others) if others else "none"))
+    return "\n".join(lines)

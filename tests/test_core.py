@@ -19,6 +19,7 @@ import geometry  # noqa: E402
 import advisor  # noqa: E402
 import llm  # noqa: E402
 import notifier  # noqa: E402
+import nvr_time  # noqa: E402
 import occlusion  # noqa: E402
 import worker  # noqa: E402
 
@@ -907,6 +908,112 @@ class GeometryTests(unittest.TestCase):
         shaped = occlusion.roi_visibility((0, 0, 100, 100), [corner, nvr], "NVR.exe",
                                           inside=lambda xs, ys: geometry.contains(roi, xs, ys))
         self.assertTrue(shaped.ok, shaped.detail)
+
+
+class NvrTimeTests(unittest.TestCase):
+    def test_parse_live_and_search(self):
+        from datetime import date, datetime
+        self.assertEqual(nvr_time.parse("2026-10-10 10:56:49", "live"), datetime(2026, 10, 10, 10, 56, 49))
+        self.assertEqual(nvr_time.parse("2O26-1O-10 1O:56:49", "live"), datetime(2026, 10, 10, 10, 56, 49))
+        self.assertIsNone(nvr_time.parse("08:46:36", "live"))                     # 라이브는 날짜가 있어야 함
+        self.assertEqual(nvr_time.parse("08:46:36", "search", today=date(2026, 10, 10)),
+                         datetime(2026, 10, 10, 8, 46, 36))
+        self.assertEqual(nvr_time.parse("08 : 46 : 36", "search", "2026-10-09"), datetime(2026, 10, 9, 8, 46, 36))
+        self.assertIsNone(nvr_time.parse("", "search"))
+        self.assertIsNone(nvr_time.parse("99:99:99", "search"))
+
+    def test_preprocess_keeps_text_color(self):
+        img = np.zeros((10, 20, 3), dtype=np.uint8)
+        img[2:8, 2:8] = (250, 250, 250)        # 흰 글씨
+        img[2:8, 12:18] = (240, 220, 30)       # 노란 글씨
+        live = nvr_time.preprocess(img, "live")
+        search = nvr_time.preprocess(img, "search")
+        self.assertEqual(live.shape, ((10 + 12) * 3, (20 + 12) * 3))
+        o = 6 * 3                               # 여백 6px × 3배
+        self.assertEqual(int(live[o + 12, o + 12]), 0)           # 흰 글씨 → 검정
+        self.assertEqual(int(live[o + 12, o + 40]), 255)         # 노란 글씨는 라이브에서 제외
+        self.assertEqual(int(search[o + 12, o + 40]), 0)
+        self.assertEqual(int(search[o + 12, o + 12]), 255)
+
+    def test_resolve_and_sources(self):
+        sources = nvr_time.parse_sources([
+            {"name": "라이브 1", "kind": "live", "x": 1500, "y": 0, "w": 240, "h": 24},
+            {"name": "재생 1", "kind": "search", "x": 2300, "y": 1200, "w": 120, "h": 30},
+            {"name": "bad", "kind": "x", "x": 0, "y": 0, "w": 50, "h": 20}, "junk"])
+        self.assertEqual([s["name"] for s in sources], ["라이브 1", "재생 1"])
+        near_live = config.ROI(x=1400, y=100, w=100, h=100)
+        near_search = config.ROI(x=2200, y=1000, w=100, h=100)
+        self.assertEqual(nvr_time.resolve(near_live, sources)["name"], "라이브 1")
+        self.assertEqual(nvr_time.resolve(near_search, sources)["name"], "재생 1")
+        near_live.time_source = "재생 1"
+        self.assertEqual(nvr_time.resolve(near_live, sources)["name"], "재생 1")
+        near_live.time_source = "pc"
+        self.assertIsNone(nvr_time.resolve(near_live, sources))
+        self.assertIsNone(nvr_time.resolve(near_search, []))
+        cfg = config.config_from_dict({"time_sources": sources, "playback_date": "2026-10-09",
+                                       "rois": [{"name": "A", "time_source": "재생 1"}]})
+        self.assertEqual((len(cfg.time_sources), cfg.playback_date, cfg.rois[0].time_source),
+                         (2, "2026-10-09", "재생 1"))
+
+    def test_snapshot_named_with_nvr_time(self):
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(worker.paths, "SNAPSHOT_DIR", tmp):
+            cfg = config.AppConfig(time_sources=[{"name": "라이브 1", "kind": "live", "x": 0, "y": 0,
+                                                  "w": 50, "h": 20}])
+            mon = worker.Monitor(cfg, queue.Queue(), mock.Mock())
+            roi = config.ROI(name="cam", w=40, h=30)
+            view, raw = mon._save_snapshot(roi, noise(30, 40), None, (datetime(2026, 10, 10, 10, 56, 49), "라이브 1"))
+            self.assertTrue(os.path.basename(view).startswith("20261010_105649_cam_LIVE"), view)
+            view, raw = mon._save_snapshot(roi, noise(30, 40), None, (None, ""))
+            self.assertTrue(os.path.basename(view).endswith("_PC.png"), view)
+
+
+class NgAnalysisTests(unittest.TestCase):
+    def test_context_and_prompt(self):
+        roi = config.ROI(name="2라인 와인딩", w=320, h=180, shape="ellipse", angle=15)
+        st = agent.RoiStats(inspections=40, ok=30, ng=10)
+        info = {"roi_name": roi.name, "detector": "OK/NG", "detail": "NG 샘플과 가장 비슷 (OK 0.71 · NG 0.18)",
+                "nvr_time": "2026-10-10 10:56:49", "nvr_source": "라이브 1", "time": "2026-10-10 10:56:50",
+                "consecutive": 3}
+        text = advisor.ng_context(info, roi, st, {"09": 0, "10": 4}, {"ok": 5, "ng": 2, "skip": 1}, ["1라인 탭 A"])
+        for part in ("2라인 와인딩", "NG 샘플과 가장 비슷", "NVR 2026-10-10 10:56:49", "consecutive NG: 3",
+                     "shape=ellipse", "5/2/1", "judged=40", "10h=4", "1라인 탭 A"):
+            self.assertIn(part, text)
+        self.assertIn("1) 현상", llm.ng_system_prompt())
+
+    def test_image_is_sent_as_image_url(self):
+        import http.server
+        import threading
+        seen = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                out = json.dumps({"choices": [{"message": {"content": "<think>x</think>1) 현상: 탭 접힘"}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "snap.png")
+                worker.save_png(noise(300, 900), path)
+                jpeg = llm.jpeg_bytes(path)
+                self.assertTrue(jpeg.startswith(b"\xff\xd8"))
+                answer = llm.LocalLLM(f"http://127.0.0.1:{server.server_port}/v1", "vl").chat(
+                    "NG", system=llm.ng_system_prompt(), image_jpeg=jpeg)
+        finally:
+            server.shutdown()
+        self.assertEqual(answer, "1) 현상: 탭 접힘")
+        content = seen["body"]["messages"][1]["content"]
+        self.assertEqual([c["type"] for c in content], ["text", "image_url"])
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
 
 
 class NotifierTests(unittest.TestCase):

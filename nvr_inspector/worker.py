@@ -21,6 +21,7 @@ import numpy as np
 import detectors
 import geometry
 import notifier
+import nvr_time
 import occlusion
 import paths
 import winutil
@@ -138,6 +139,7 @@ class Monitor(threading.Thread):
         self._refs: Dict[str, tuple] = {}   # roi_id -> ((파일, 수정시각)…, 배열 목록)
         self._clock = time.time              # 테스트에서 교체 가능
         self._windows = None                 # 이번 주기 화면 창 목록 (가림 판정용)
+        self._grabber = None                 # 이번 주기 캡처 객체 (NVR 시간 읽기용)
         self._union = None                   # (x0, y0, 전체 캡처) – 한 번에 캡처한 화면
         self.send_frames = False             # 대시보드 썸네일 전송 여부
         self.thumb_sides: Dict[str, int] = {}  # ROI별 썸네일 최대 변 길이 (카메라 월 카드 크기)
@@ -198,6 +200,7 @@ class Monitor(threading.Thread):
     def _tick(self, cfg: AppConfig, grabber: Grabber) -> None:
         alive = set()
         self._windows = None
+        self._grabber = grabber
         self._prefetch(cfg, grabber)
         for roi in cfg.rois:
             if self._stop_event.is_set():
@@ -306,8 +309,9 @@ class Monitor(threading.Thread):
         repeat_due = roi.repeat_min > 0 and now - rt.last_alert >= roi.repeat_min * 60
         if not rt.alerted or repeat_due:
             kind = "repeat" if rt.alerted else "alert"
-            snapshot, raw = self._save_snapshot(roi, frame, res.mask)
-            self._fire(cfg, roi, kind, res.detail, elapsed, snapshot, raw)
+            nvr = self._nvr_time(cfg, roi)
+            snapshot, raw = self._save_snapshot(roi, frame, res.mask, nvr)
+            self._fire(cfg, roi, kind, res.detail, elapsed, snapshot, raw, nvr)
             rt.alerted, rt.last_alert = True, now
         self._emit("status", roi.id, "alarm", res.detail + tr(" · {dur} 지속", dur=notifier.fmt_duration(elapsed)))
 
@@ -352,8 +356,9 @@ class Monitor(threading.Thread):
         if res.abnormal is None:
             rt.last_result = ("wait", stamp + res.detail)
         elif res.abnormal:
-            snapshot, raw = self._save_snapshot(roi, frame, res.mask)
-            self._fire(cfg, roi, "alert", res.detail, None, snapshot, raw)
+            nvr = self._nvr_time(cfg, roi)
+            snapshot, raw = self._save_snapshot(roi, frame, res.mask, nvr)
+            self._fire(cfg, roi, "alert", res.detail, None, snapshot, raw, nvr)
             rt.alerted, rt.last_alert = True, self._clock()
             rt.last_result = ("alarm", stamp + res.detail)
         else:
@@ -363,11 +368,32 @@ class Monitor(threading.Thread):
             rt.last_result = ("ok", stamp + res.detail)
         self._emit("status", roi.id, *rt.last_result)
 
-    def _save_snapshot(self, roi: ROI, frame: np.ndarray, mask):
-        """확대 보기용(불량 위치 빨간 표시 포함)과 원본(ROI 크기 – 샘플 등록용)을 저장. 반환: (보기용, 원본)."""
+    def _nvr_time(self, cfg: AppConfig, roi: ROI):
+        """NG 순간 NVR 화면에 표시된 시간 (라이브: 오른쪽 위 흰 글씨, 재생: 왼쪽 아래 노란 글씨).
+        반환: (datetime 또는 None, 출처 이름). 시간 표시 영역이 없거나 읽지 못하면 (None, '')."""
+        src = nvr_time.resolve(roi, getattr(cfg, "time_sources", []))
+        if src is None or self._grabber is None:
+            return None, ""
         try:
-            base = os.path.join(paths.SNAPSHOT_DIR,
-                                f"{datetime.now():%Y%m%d_%H%M%S}_{_safe_filename(roi.name)}")
+            rgb = self._grabber.grab(src["x"], src["y"], src["w"], src["h"])
+            when, text = nvr_time.read(src, rgb, getattr(cfg, "playback_date", ""))
+        except Exception as e:
+            log.warning("NVR 시간 읽기 실패 [%s]: %s", src.get("name"), e)
+            return None, ""
+        if when is None:
+            log.warning("NVR 시간 인식 실패 [%s]: '%s' – PC 시간 사용", src.get("name"), text[:40])
+            return None, ""
+        return when, src["name"]
+
+    def _save_snapshot(self, roi: ROI, frame: np.ndarray, mask, nvr=(None, "")):
+        """확대 보기용(불량 위치 빨간 표시 포함)과 원본(ROI 크기 – 샘플 등록용)을 저장. 반환: (보기용, 원본).
+        파일 이름 시각은 NVR 화면 시간(읽었으면) – 끝에 _LIVE/_SEARCH, 못 읽으면 PC 시간에 _PC."""
+        try:
+            when, src = nvr
+            kind = next((s["kind"] for s in getattr(self._cfg, "time_sources", []) if s["name"] == src), "")
+            tag = {"live": "LIVE", "search": "SEARCH"}.get(kind, "PC")
+            stamp = (when or datetime.now()).strftime("%Y%m%d_%H%M%S")
+            base = os.path.join(paths.SNAPSHOT_DIR, f"{stamp}_{_safe_filename(roi.name)}_{tag}")
             raw = base + "_원본.png"  # i18n: skip
             save_png(frame, raw)
             scale = getattr(self._cfg, "snapshot_scale", SNAPSHOT_SCALE)
@@ -381,7 +407,8 @@ class Monitor(threading.Thread):
             return None, None
 
     def _fire(self, cfg: AppConfig, roi: ROI, kind: str, detail: str,
-              elapsed: Optional[float], snapshot: Optional[str], raw: Optional[str] = None) -> None:
+              elapsed: Optional[float], snapshot: Optional[str], raw: Optional[str] = None,
+              nvr=(None, "")) -> None:
         when = now_text()
         info = {
             "kind": kind, "roi_id": roi.id, "roi_name": roi.name,
@@ -389,6 +416,7 @@ class Monitor(threading.Thread):
             "assignee": roi.assignee, "assignee_email": roi.assignee_email,
             "time": when, "snapshot": snapshot, "raw_snapshot": raw,
             "roi_detector": roi.detector,
+            "nvr_time": nvr[0].strftime("%Y-%m-%d %H:%M:%S") if nvr[0] else "", "nvr_source": nvr[1],
         }
         label = {"alert": "이상 감지", "repeat": "재알림", "recover": "복구"}[kind]
         log.warning("[%s] %s – %s", roi.name, label, detail)

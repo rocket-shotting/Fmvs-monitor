@@ -65,6 +65,34 @@ def system_prompt() -> str:
             "자료가 부족하면 부족하다고 말하세요. 숫자를 지어내지 마세요.")  # i18n: skip
 
 
+def ng_system_prompt() -> str:
+    """NG 1건 자동 분석용 지시문."""
+    if language() == "en":
+        return ("You analyze a single NG (defect) event from FMVS Vision Agent, which watches battery-cell production "
+                "camera views. Using ONLY the given data (and the image if attached), answer in this exact format, "
+                "each item at most 2 short lines:\n1) Symptom\n2) Likely causes (most likely first)\n"
+                "3) What to check / do now\n4) False-alarm possibility\nNever invent numbers.")
+    return ("당신은 배터리 셀 생산 라인 카메라 화면을 감시하는 FMVS Vision Agent의 NG 분석 담당입니다. "  # i18n: skip
+            "NG 1건에 대해 주어진 자료(이미지가 있으면 이미지 포함)만 근거로 아래 형식 그대로, 항목당 2줄 이내 한국어로 답하세요.\n"  # i18n: skip
+            "1) 현상\n2) 추정 원인 (가능성 높은 순)\n3) 지금 확인·조치할 것\n4) 오탐 가능성\n"  # i18n: skip
+            "숫자를 지어내지 마세요.")  # i18n: skip
+
+
+def jpeg_bytes(path: str, max_side: int = 768) -> Optional[bytes]:
+    """스냅샷 파일 → LLM 전송용 JPEG (긴 변 max_side 이하)."""
+    try:
+        import io
+        from PIL import Image
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((max_side, max_side))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
+            return buf.getvalue()
+    except Exception:
+        return None
+
+
 class LocalLLM:
     def __init__(self, url: str, model: str, api_key: str = "", timeout: float = TIMEOUT):
         self.url = url.strip().rstrip("/")
@@ -82,13 +110,20 @@ class LocalLLM:
             return tr("모델 이름을 입력하세요 (예: qwen3:4b-instruct)")
         return None
 
-    def chat(self, user: str, system: Optional[str] = None) -> str:
+    def chat(self, user: str, system: Optional[str] = None, image_jpeg: Optional[bytes] = None) -> str:
+        """image_jpeg: 함께 보낼 이미지 (비전 모델용, OpenAI 호환 image_url 형식)."""
         error = self.check()
         if error:
             raise LLMError(error)
+        content = user
+        if image_jpeg:
+            import base64
+            content = [{"type": "text", "text": user},
+                       {"type": "image_url", "image_url": {
+                           "url": "data:image/jpeg;base64," + base64.b64encode(image_jpeg).decode("ascii")}}]
         body = {"model": self.model, "temperature": 0.2, "stream": False,
                 "messages": [{"role": "system", "content": system or system_prompt()},
-                             {"role": "user", "content": user}]}
+                             {"role": "user", "content": content}]}
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"

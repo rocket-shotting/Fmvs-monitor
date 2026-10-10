@@ -32,7 +32,8 @@ _SHAPES = {"rect": "사각형", "ellipse": "타원 (원)"}
 
 
 class RoiDialog:
-    def __init__(self, master: tk.Misc, roi: ROI, title: str):
+    def __init__(self, master: tk.Misc, roi: ROI, title: str, time_sources=()):
+        self.time_sources = [src["name"] for src in time_sources]
         self.master = master
         self.roi = copy.deepcopy(roi)
         self.result: Optional[ROI] = None
@@ -87,6 +88,15 @@ class RoiDialog:
             row=3, column=5, sticky="w", pady=(4, 0))
         ttk.Label(box, text=tr("모양·각도는 [⌖ 위치 재지정]에서 마우스로도 바꿀 수 있습니다 (원: 타원 + 폭=높이)"),
                   foreground="#555555").grid(row=4, column=0, columnspan=8, sticky="w", pady=(2, 0))
+        # 스냅샷 시간: NVR 화면 시간 표시 (설정 → NVR 화면 시간에서 등록)
+        self._time_choices = {"auto": tr("자동 (가장 가까운 NVR 시간)"), "pc": tr("PC 시간")}
+        self._time_choices.update({name: name for name in self.time_sources})
+        current = self.roi.time_source if self.roi.time_source in self._time_choices else "auto"
+        self.v_time = tk.StringVar(value=self._time_choices[current])
+        ttk.Label(box, text=tr("스냅샷 시간")).grid(row=5, column=0, sticky="e", pady=(4, 0))
+        ttk.Combobox(box, textvariable=self.v_time, state="readonly", width=26,
+                     values=list(self._time_choices.values())).grid(row=5, column=1, columnspan=5, sticky="w",
+                                                                    pady=(4, 0))
 
     def _build_detect(self, parent):
         box = ttk.LabelFrame(parent, text=tr("검출 조건"), padding=8)
@@ -220,6 +230,8 @@ class RoiDialog:
             raise ValueError(tr("ROI 폭/높이는 4 이상이어야 합니다."))
         selected = self.v_shape.get()
         roi.shape = next((k for k, v in _SHAPES.items() if tr(v) == selected), "rect")
+        chosen = self.v_time.get()
+        roi.time_source = next((k for k, v in self._time_choices.items() if v == chosen), "auto")
         try:
             roi.angle = round(float(self.v_angle.get()) % 360.0, 2)
         except ValueError:
@@ -385,5 +397,5 @@ class RoiDialog:
         return self.result
 
 
-def edit_roi(master: tk.Misc, roi: ROI, title: Optional[str] = None) -> Optional[ROI]:
-    return RoiDialog(master, roi, title or tr("ROI 설정")).run()
+def edit_roi(master: tk.Misc, roi: ROI, title: Optional[str] = None, time_sources=()) -> Optional[ROI]:
+    return RoiDialog(master, roi, title or tr("ROI 설정"), time_sources).run()

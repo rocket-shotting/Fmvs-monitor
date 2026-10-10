@@ -85,7 +85,7 @@ class AppConfig:
     language: str = "ko"               # 화면 언어: ko | en
     llm_enabled: bool = False          # 의견 에이전트에 로컬/사내 LLM 연결 (선택)
     llm_url: str = "http://127.0.0.1:11434/v1"   # OpenAI 호환 API 주소 (localhost·사내망만 허용)
-    llm_model: str = ""                # 예: qwen2.5:7b
+    llm_model: str = ""                # 예: qwen3:4b-instruct
     llm_api_key: str = ""              # 서버가 요구할 때만
     pc_label: str = field(default_factory=socket.gethostname)
     rois: List[ROI] = field(default_factory=list)

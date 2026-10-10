@@ -138,7 +138,7 @@ class SettingsDialog:
         ttk.Button(test, text=tr("연결 테스트"), command=self._test_llm).pack(side="left")
         self.llm_status = ttk.Label(test, text="", foreground="#555555", wraplength=300, justify="left")
         self.llm_status.pack(side="left", padx=8)
-        ttk.Label(box, text=tr("예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen2.5:7b\n"
+        ttk.Label(box, text=tr("예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen3:4b-instruct\n"
                                "LM Studio → http://127.0.0.1:1234/v1\n"
                                "보내는 내용: ROI별 판정 통계·의견 목록(텍스트)만. 화면·이미지는 보내지 않습니다.\n"
                                "외부 인터넷 주소는 보안상 사용할 수 없습니다."),
@@ -146,7 +146,7 @@ class SettingsDialog:
 
     def _test_llm(self):
         import llm
-        client = llm.LocalLLM(self.v_llm_url.get(), self.v_llm_model.get(), self.v_llm_key.get(), timeout=20)
+        client = llm.LocalLLM(self.v_llm_url.get(), self.v_llm_model.get(), self.v_llm_key.get(), timeout=90)
         self.llm_status.configure(text=tr("연결 중…"), foreground="#555555")
         self.top.config(cursor="watch")
         self.top.update()

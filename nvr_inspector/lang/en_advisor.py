@@ -87,7 +87,7 @@ EN = {
     "LLM 서버 주소를 입력하세요": "Enter the LLM server address",
     "보안: 이 PC(localhost) 또는 사내망 주소만 사용할 수 있습니다":
         "Security: only this PC (localhost) or in-house network addresses are allowed",
-    "모델 이름을 입력하세요 (예: qwen2.5:7b)": "Enter a model name (e.g. qwen2.5:7b)",
+    "모델 이름을 입력하세요 (예: qwen3:4b-instruct)": "Enter a model name (e.g. qwen3:4b-instruct)",
     "LLM 서버 오류 {code}: {msg}": "LLM server error {code}: {msg}",
     "LLM 서버에 연결할 수 없습니다: {msg}": "Cannot connect to the LLM server: {msg}",
     "LLM 서버 응답을 해석할 수 없습니다": "Cannot parse the LLM server response",
@@ -101,8 +101,8 @@ EN = {
     "연결 중…": "Connecting…",
     "연결 테스트입니다. 'OK' 한 단어로만 답하세요.": "This is a connection test. Reply with the single word 'OK'.",
     "✔ 연결됨 – 응답: {answer}": "✔ Connected – reply: {answer}",
-    "예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen2.5:7b\nLM Studio → http://127.0.0.1:1234/v1\n보내는 내용: ROI별 판정 통계·의견 목록(텍스트)만. 화면·이미지는 보내지 않습니다.\n외부 인터넷 주소는 보안상 사용할 수 없습니다.":
-        "e.g. Ollama → http://127.0.0.1:11434/v1 · model qwen2.5:7b\nLM Studio → http://127.0.0.1:1234/v1\n"
+    "예: Ollama → http://127.0.0.1:11434/v1 · 모델 qwen3:4b-instruct\nLM Studio → http://127.0.0.1:1234/v1\n보내는 내용: ROI별 판정 통계·의견 목록(텍스트)만. 화면·이미지는 보내지 않습니다.\n외부 인터넷 주소는 보안상 사용할 수 없습니다.":
+        "e.g. Ollama → http://127.0.0.1:11434/v1 · model qwen3:4b-instruct\nLM Studio → http://127.0.0.1:1234/v1\n"
         "Sent: per-ROI judgment statistics and the recommendation list (text) only. Screens and images are never sent.\n"
         "External internet addresses are blocked for security.",
     # ROI 모양·회전

@@ -6,6 +6,7 @@ Ollama(http://127.0.0.1:11434/v1), LM Studio(http://127.0.0.1:1234/v1), vLLM, ll
 보내는 내용은 텍스트 분석 자료뿐이다 (화면·이미지는 보내지 않음). 추가 패키지 없이 표준 라이브러리만 쓴다."""
 import ipaddress
 import json
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -43,6 +44,14 @@ def is_local_url(url: str) -> bool:
     return bool(addrs) and all(a.is_loopback or a.is_private for a in addrs)
 
 
+_THINK = re.compile(r"<think>.*?(</think>|$)", re.S | re.I)
+
+
+def strip_thinking(text: str) -> str:
+    """추론형 모델(Qwen3·DeepSeek-R1 등)이 붙이는 <think>…</think> 생각 과정을 빼고 답만 남긴다."""
+    return _THINK.sub("", text).strip()
+
+
 def system_prompt() -> str:
     if language() == "en":
         return ("You are the quality-monitoring advisor inside FMVS Vision Agent, a program that watches many "
@@ -70,7 +79,7 @@ class LocalLLM:
         if not is_local_url(self.url):
             return tr("보안: 이 PC(localhost) 또는 사내망 주소만 사용할 수 있습니다")
         if not self.model:
-            return tr("모델 이름을 입력하세요 (예: qwen2.5:7b)")
+            return tr("모델 이름을 입력하세요 (예: qwen3:4b-instruct)")
         return None
 
     def chat(self, user: str, system: Optional[str] = None) -> str:
@@ -97,7 +106,7 @@ class LocalLLM:
         except ValueError:
             raise LLMError(tr("LLM 서버 응답을 해석할 수 없습니다"))
         try:
-            return str(data["choices"][0]["message"]["content"]).strip()
+            return strip_thinking(str(data["choices"][0]["message"]["content"]))
         except (KeyError, IndexError, TypeError):
             raise LLMError(tr("LLM 서버 응답을 해석할 수 없습니다"))
 

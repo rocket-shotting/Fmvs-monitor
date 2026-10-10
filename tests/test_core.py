@@ -806,6 +806,11 @@ class LLMTests(unittest.TestCase):
         self.assertIn("보안", llm.LocalLLM("http://8.8.8.8/v1", "m").check())
         self.assertIsNone(llm.from_config(config.AppConfig()))      # 기본 꺼짐
 
+    def test_strip_thinking(self):
+        self.assertEqual(llm.strip_thinking("<think>\n음… 계산\n</think>\n\n1. 샘플 추가"), "1. 샘플 추가")
+        self.assertEqual(llm.strip_thinking("1. 그대로"), "1. 그대로")
+        self.assertEqual(llm.strip_thinking("<think>끝나지 않은 생각"), "")
+
     def test_chat_against_local_server(self):
         import http.server
         import threading
